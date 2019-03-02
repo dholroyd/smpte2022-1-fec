@@ -1,0 +1,17 @@
+[package]
+name = "smpte2022-1-fec"
+version = "0.1.0"
+authors = ["David Holroyd <dave@badgers-in-foil.co.uk>"]
+edition = "2018"
+
+[dependencies]
+smpte2022-1-packet = { path = "../smpte2022-1-packet" }
+rtp-rs = { path = "../rtp-rs" }
+slab = "0.4"
+
+[dev-dependencies]
+hex-literal = "0.1"
+
+# For examples
+mio = "0.6"
+socket2 = "0.3"
