@@ -3,6 +3,8 @@ use socket2::{Socket, Domain, Type, Protocol};
 use std::net::SocketAddr;
 use smpte2022_1_fec::*;
 use smpte2022_1_fec::heap_pool::HeapPool;
+use smpte2022_1_fec::heap_pool::HeapPacketRef;
+use rtp_rs::RtpReader;
 
 const MAIN: mio::Token = mio::Token(0);
 const FEC_ONE: mio::Token = mio::Token(1);
@@ -10,6 +12,18 @@ const FEC_TWO: mio::Token = mio::Token(2);
 
 const PACKET_SIZE_MAX: usize = 1500;
 const PACKET_COUNT_MAX: usize = 10 * 10 * 2;
+
+struct MyReceiver;
+impl Receiver<HeapPacketRef> for MyReceiver {
+    fn receive(&mut self, packets: impl Iterator<Item=HeapPacketRef>) {
+        for pk in packets {
+            match RtpReader::new(pk.payload()) {
+                Ok(header) => println!("got packet with seq {:?}", header.sequence_number()),
+                Err(e) => println!("packet error {:?}", e),
+            }
+        }
+    }
+}
 
 fn create_source(port: u16) -> Result<mio::net::UdpSocket, io::Error> {
     let s = Socket::new(Domain::ipv4(), Type::dgram(), Some(Protocol::udp()))?;
@@ -26,7 +40,8 @@ fn main() -> Result<(), std::io::Error> {
     let fec_two = create_source(base_port + 4)?;
 
     let buffer_pool = HeapPool::new(PACKET_COUNT_MAX, PACKET_SIZE_MAX);
-    let mut decoder = Decoder::new(buffer_pool.clone());
+    let recv = MyReceiver;
+    let mut decoder = Decoder::new(buffer_pool.clone(), recv);
 
     let poll = mio::Poll::new()?;
     poll.register(&main_sock, MAIN, mio::Ready::readable(), mio::PollOpt::edge())?;
@@ -69,7 +84,6 @@ fn main() -> Result<(), std::io::Error> {
                 FEC_TWO => loop {
                     let pk = buffer_pool.allocate().expect("allocating main buffer");
                     let mut ref_mut = pk.into_ref_mut();
-                    println!("FEC_TWO len {}", ref_mut.payload().len());
                     let size = match fec_two.recv(ref_mut.payload()) {
                         Ok(s) => s,
                         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
