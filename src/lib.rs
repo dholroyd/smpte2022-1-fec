@@ -1,5 +1,5 @@
 //! Support for decoding of RTP streams using
-//! [SMPTE 2022-1](https://en.wikipedia.org/wiki/SMPTE_2022) Forward Error Correction, also know
+//! [SMPTE 2022-1](https://en.wikipedia.org/wiki/SMPTE_2022) Forward Error Correction, also known
 //! as 'Pro-MPEG Code of Practice #3' or '1D/2D parity FEC' or '2dparityfec'.
 
 #![forbid(unsafe_code)]
@@ -15,7 +15,7 @@ use smpte2022_1_packet::FecHeader;
 use std::collections::VecDeque;
 use std::marker;
 
-pub trait Receiver<P: PacketRef> {
+pub trait Receiver<P: Packet> {
     fn receive(&mut self, packets: impl Iterator<Item = P>);
 }
 
@@ -85,27 +85,8 @@ impl FecGeometry {
 }
 
 pub trait Packet: Sized {
-    type R: PacketRef<P = Self>;
-    type W: PacketRefMut<P = Self>;
-
-    fn into_ref(self) -> Self::R;
-    fn into_ref_mut(self) -> Self::W;
-}
-pub trait PacketRef: Sized {
-    type P: Packet;
-
     fn payload(&self) -> &[u8];
-
-    /// Attempt to re-obtain the Packet to which this is a reference, returning `Result::Err`
-    /// containing the `HeapPacketRef` if other references to the packet still exist.
-    fn try_into_packet(self) -> Result<Self::P, Self>;
-}
-pub trait PacketRefMut {
-    type P: Packet;
-
-    fn payload(&mut self) -> &mut [u8];
-
-    fn into_packet(self) -> Self::P;
+    fn payload_mut(&mut self) -> &mut [u8];
 
     /// adjust the size of the underlying buffer to the given value
     ///
@@ -122,26 +103,26 @@ pub trait BufferPool {
     fn allocate(&self) -> Option<Self::P>;
 }
 
-struct NilReceiver<P: PacketRef> {
+struct NilReceiver<P: Packet> {
     phantom: marker::PhantomData<P>,
 }
-impl<P: PacketRef> Receiver<P> for NilReceiver<P> {
+impl<P: Packet> Receiver<P> for NilReceiver<P> {
     fn receive(&mut self, packets: impl Iterator<Item = P>) {}
 }
 
-struct SeqEntry<P: PacketRef> {
+struct SeqEntry<P: Packet> {
     // TODO: we could actually just store the base SN value in PacketSequence and work out the 'seq'
     //       value here from that.  For now keep it explicit to enable more assertions while I'm
     //       still working out the implementation.
     seq: rtp_rs::Seq,
     pk: Option<P>,
 }
-struct PacketSequence<P: PacketRef, Recv: Receiver<P>> {
+struct PacketSequence<P: Packet, Recv: Receiver<P>> {
     size_limit: usize,
     packets: VecDeque<SeqEntry<P>>,
     recv: Recv,
 }
-impl<P: PacketRef> PacketSequence<P, NilReceiver<P>> {
+impl<P: Packet> PacketSequence<P, NilReceiver<P>> {
     pub fn new(size_limit: usize) -> PacketSequence<P, NilReceiver<P>> {
         PacketSequence {
             size_limit,
@@ -152,7 +133,7 @@ impl<P: PacketRef> PacketSequence<P, NilReceiver<P>> {
         }
     }
 }
-impl<P: PacketRef, Recv: Receiver<P>> PacketSequence<P, Recv> {
+impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
     pub fn new_with_receiver(size_limit: usize, recv: Recv) -> PacketSequence<P, Recv> {
         PacketSequence {
             size_limit,
@@ -255,13 +236,13 @@ impl<P: PacketRef, Recv: Receiver<P>> PacketSequence<P, Recv> {
 ///  -----------+
 ///  C  C  C  C     <-- column FEC descriptors
 /// ```
-struct FecMatrix<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> {
+struct FecMatrix<BP: BufferPool, Recv: Receiver<BP::P>> {
     buffer_pool: BP,
-    main_descriptors: PacketSequence<<BP::P as Packet>::R, Recv>,
-    row_descriptors: PacketSequence<<BP::P as Packet>::R, NilReceiver<<BP::P as Packet>::R>>,
-    col_descriptors: PacketSequence<<BP::P as Packet>::R, NilReceiver<<BP::P as Packet>::R>>,
+    main_descriptors: PacketSequence<BP::P, Recv>,
+    row_descriptors: PacketSequence<BP::P, NilReceiver<BP::P>>,
+    col_descriptors: PacketSequence<BP::P, NilReceiver<BP::P>>,
 }
-impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> FecMatrix<BP, Recv> {
+impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
     /// Panics if there would be more than 100 entries in the matrix
     pub fn new(buffer_pool: BP, cols: u8, rows: u8, receiver: Recv) -> FecMatrix<BP, Recv> {
         assert!(cols * rows <= 100);
@@ -278,8 +259,7 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> FecMatrix<BP, Recv> {
     //       Support calling code collecting stats about number of losses + corrections.
 
     pub fn insert(&mut self, seq: rtp_rs::Seq, pk: BP::P) -> Result<Option<BP::P>, FecDecodeError> {
-        let pk_ref = pk.into_ref();
-        self.main_descriptors.insert(seq, pk_ref);
+        self.main_descriptors.insert(seq, pk);
 
         // if we already have FEC packets covering this media packet (because things arrived out
         // of sequence) then the arrival of this packet may now make it possible to apply a
@@ -304,13 +284,12 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> FecMatrix<BP, Recv> {
         seq: rtp_rs::Seq,
         pk: BP::P,
     ) -> Result<Option<BP::P>, FecDecodeError> {
-        let pk_ref = pk.into_ref();
-        let rtp_header = rtp_rs::RtpReader::new(pk_ref.payload())?;
+        let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
         let (fec_header, fec_payload) = fec::FecHeader::split_from_bytes(rtp_header.payload())?;
 
         let res = self.maybe_correct(fec_header, fec_payload);
 
-        self.col_descriptors.insert(seq, pk_ref);
+        self.col_descriptors.insert(seq, pk);
         Ok(res)
     }
 
@@ -319,13 +298,12 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> FecMatrix<BP, Recv> {
         seq: rtp_rs::Seq,
         pk: BP::P,
     ) -> Result<Option<BP::P>, FecDecodeError> {
-        let pk_ref = pk.into_ref();
-        let rtp_header = rtp_rs::RtpReader::new(pk_ref.payload())?;
+        let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
         let (fec_header, fec_payload) = fec::FecHeader::split_from_bytes(rtp_header.payload())?;
 
         let res = self.maybe_correct(fec_header, fec_payload);
 
-        self.row_descriptors.insert(seq, pk_ref);
+        self.row_descriptors.insert(seq, pk);
         Ok(res)
     }
 
@@ -333,7 +311,7 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> FecMatrix<BP, Recv> {
     fn iter_associated(
         &self,
         fec_header: &FecHeader<'_>,
-    ) -> impl Iterator<Item = (Seq, Option<&<BP::P as Packet>::R>)> {
+    ) -> impl Iterator<Item = (Seq, Option<&BP::P>)> {
         let sn_start = ((fec_header.sn_base() & 0xffff) as u16).into();
         let sn_end = sn_start + u16::from(fec_header.number_associated()) * u16::from(fec_header.offset());
 
@@ -368,9 +346,9 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> FecMatrix<BP, Recv> {
                 eprintln!("failed to allocate buffer from pool");
                 return None;
             }
-            let mut recovered_ref = recovered.unwrap().into_ref_mut();
-            recovered_ref.truncate(fec_payload.len() + 12);
-            let payload = recovered_ref.payload();
+            let mut recovered = recovered.unwrap();
+            recovered.truncate(fec_payload.len() + 12);
+            let payload = recovered.payload_mut();
             // the 'payload' of the FEC packet protects the payload of the media packets, but
             // not the headers, also prompeg disallows CSRC
             payload[12..].copy_from_slice(fec_payload);
@@ -397,8 +375,8 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> FecMatrix<BP, Recv> {
                     RtpReader::new(payload).unwrap().timestamp(),
                 );
             }
-            recovered_ref.truncate(len_recover as usize);
-            Some(recovered_ref.into_packet())
+            recovered.truncate(len_recover as usize);
+            Some(recovered)
         } else {
             None
         }
@@ -459,7 +437,7 @@ impl From<fec::FecHeaderError> for FecDecodeError {
 //  - Should we provide means for the application to 'flush' packets held in the FEC matrix which
 //    aren't getting delivered to the application because the input is stopped / paused?
 
-enum State<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> {
+enum State<BP: BufferPool, Recv: Receiver<BP::P>> {
     /// This state just exits so that overwrite some other state during the transition from one
     /// state to another.
     Init,
@@ -469,7 +447,7 @@ enum State<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> {
         matrix: FecMatrix<BP, Recv>,
     },
 }
-impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> State<BP, Recv> {
+impl<BP: BufferPool, Recv: Receiver<BP::P>> State<BP, Recv> {
     fn running(&mut self, width: u8, height: u8, geometry: FecGeometry) {
         *self = match std::mem::replace(self, State::Init) {
             State::Start(buffer_pool, receiver) => State::Running {
@@ -540,10 +518,10 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> State<BP, Recv> {
 /// This design will change in future as required to
 /// support things like `AF_XDP`, and the caller will be able to plug in their own allocation
 /// strategy.  In this future design, the decoder will just hold on to references to packets
-pub struct Decoder<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> {
+pub struct Decoder<BP: BufferPool, Recv: Receiver<BP::P>> {
     state: State<BP, Recv>,
 }
-impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> Decoder<BP, Recv> {
+impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
     ///  - `max_packet_len` A common size limit for UDP payloads is 1,472 bytes, but you might want
     ///    to supply a larger limit if it's possible that jumbo frames might me used by the network
     ///    and sending application.
@@ -561,14 +539,13 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> Decoder<BP, Recv> {
         pk: T,
     ) -> Result<(), FecDecodeError> {
         for p in pk {
-            let pk_ref = p.into_ref();
-            let rtp_header = rtp_rs::RtpReader::new(pk_ref.payload())?;
+            let rtp_header = rtp_rs::RtpReader::new(p.payload())?;
             // TODO: check that:
             //       - CSRC is not used
             //       - extension usage is unchanging
             self.state.insert_main_packet(
                 rtp_header.sequence_number(),
-                pk_ref.try_into_packet().unwrap_or_else(|e| unreachable!()),
+                p,
             )?;
         }
         Ok(())
@@ -576,11 +553,10 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> Decoder<BP, Recv> {
 
     pub fn add_row_packets<T: Iterator<Item = BP::P>>(
         &mut self,
-        pk: T,
+        packets: T,
     ) -> Result<(), FecDecodeError> {
-        for p in pk {
-            let pk_ref = p.into_ref();
-            let rtp_header = rtp_rs::RtpReader::new(pk_ref.payload())?;
+        for p in packets {
+            let rtp_header = rtp_rs::RtpReader::new(p.payload())?;
             let fec_header = fec::FecHeader::from_bytes(rtp_header.payload())?;
             if fec_header.orientation() != fec::Orientation::Row {
                 return Err(FecDecodeError::Orientation {
@@ -591,15 +567,14 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> Decoder<BP, Recv> {
             self.merge_fec_parameters(fec_header);
             let mut recovered = self.state.insert_row_packet(
                 rtp_header.sequence_number(),
-                pk_ref.try_into_packet().unwrap_or_else(|e| unreachable!()),
+                p,
             )?;
             while let Some(pk) = recovered {
-                let pk_ref = pk.into_ref();
-                let rtp_header = rtp_rs::RtpReader::new(pk_ref.payload())?;
+                let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
                 let seq = rtp_header.sequence_number();
                 recovered = self.state.insert_main_packet(
                     seq,
-                    pk_ref.try_into_packet().unwrap_or_else(|e| unreachable!()),
+                    pk,
                 )?;
             }
         }
@@ -611,8 +586,7 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> Decoder<BP, Recv> {
         pk: T,
     ) -> Result<(), FecDecodeError> {
         for p in pk {
-            let pk_ref = p.into_ref();
-            let rtp_header = rtp_rs::RtpReader::new(pk_ref.payload())?;
+            let rtp_header = rtp_rs::RtpReader::new(p.payload())?;
             let fec_header = fec::FecHeader::from_bytes(rtp_header.payload())?;
             if fec_header.orientation() != fec::Orientation::Column {
                 return Err(FecDecodeError::Orientation {
@@ -623,7 +597,7 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> Decoder<BP, Recv> {
             self.merge_fec_parameters(fec_header);
             self.state.insert_column_packet(
                 rtp_header.sequence_number(),
-                pk_ref.try_into_packet().unwrap_or_else(|e| unreachable!()),
+                p,
             )?;
         }
         Ok(())
@@ -663,14 +637,14 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> Decoder<BP, Recv> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::heap_pool::HeapPacketRef;
     use crate::heap_pool::HeapPool;
     use hex_literal::*;
     use std::io::Write;
+    use crate::heap_pool::HeapPacket;
 
     struct TestReceiver;
-    impl Receiver<HeapPacketRef> for TestReceiver {
-        fn receive(&mut self, packets: impl Iterator<Item = HeapPacketRef>) {
+    impl Receiver<HeapPacket> for TestReceiver {
+        fn receive(&mut self, packets: impl Iterator<Item = HeapPacket>) {
             unimplemented!()
         }
     }
@@ -681,11 +655,10 @@ mod tests {
         let mut decoder = Decoder::new(buffer_pool.clone(), TestReceiver);
 
         let row_pk = {
-            let row_pk = buffer_pool.allocate().unwrap();
+            let mut row_pk = buffer_pool.allocate().unwrap();
             let data = hex!("80607bc30d5c28f1000000007e6100008000000000000d6640011400001efe0b97249db8582ac143b90e9b3975a18c703817a6b1ef1035dc70edc70b67e407f57b0db156065f95baabaeeaab82d3b6a869b117c327c8f91e3b521c78a63e24bafe955d907258815b273fcc14a7d05ad3844139bb41bab400654e3e94fa3609234532e126c18a525154f0fcc52347e2c1a842d667de613fc0c79b475daffd50e0a4270df99310ed69ef211a1f2c7cdb0cda7dace687a34fb125ca480f3636764c01c42ed3bacb2e8d5eecbf11332056d0e670f380d77abbb3001eff0e5e42da393c535a3025e40cab385fd1059cc67337f9871b8823742999391d72404e65db85426ecfd34ea30e8d4850440903a7fe4c6dc0f6494153e08e2d880cd54d8f5e76afeaaee17257af357fe28404f788851369dc93b384c437620664692a9a835d2a54b191d18354e433b5955e41a15621acf0ee0b8813c8db09e4148f6c8069c4618319169c663f5d7907c15855c491c340f6ce1708e7afb99d778fd18714caba17411734f69069134964aa7210041a4a7f9619dac8001efd2740d92f5846c3222be733cdb938489ca0d0a927e4f8dbbc116da9999581b9fc757427c2d6aa7c967f10972e147b51928cd9b375c12eaac8c43740ee8e3b9da85183a9b61e23e969f6e00fac6e92d5c821c4a29cf0500608c6b539c96266c188b9f2b1f3a04f827b763a75cf6b5c659b63afcb58000b330b12325a1df557c0f636d3c2504b46327713da56f68ea5e233c634a3f566800b0d38f2ff9b5a1ba0712f45f43209a4742608fc68ede9c33ff6a37b1531c07dd66cc8005efd0de4fdea3f01961dbb0d5f138a06d241c582942ef929fd59bb0dfb4d0a15c04c0c4a2623056a7ba8000663f314fc9bc4a60c46fb314d665e074aa6124bde35d23393f951e1ebf02429f5ccce4da6b312fb31840b11f54d825f77504dcd4d4a0fbfa343c110baa3dda2f5ca1e0a3d31fda1edda34d946009c78a86780f8be8c9cb4423a6d2c452cbd9c9ddaf567836c2154cdbe7f781a4a5e6e042d8715a514962c38436885bfd632b728c8404ea2b56ecf2f095d4d98b84ee50000012e0739f29e76c8c6efd1603ebe9aa00179624fe383a56b562fb893d4ec9bad6eae1d0206ba6557543530e109a866afbaf50c9671ccb3daaf0f62fe44ae30ee33fc72dac60bd3f9f7c2d6638ebba1a8a1528acff6f278902caa09060e84a3fb64cd403de93318d0a8724b1bb266ebf6fc456b2f643b8a81f7b898599485349c40eae783217f030a37c7f01c100260932514c8060fe41437364d1aedf8b554077df6de7f8d147040ead501d28e613273b51b1e632932b92b5a860000000ac26f8e44befa5b6b1b1cd5a60da71a8a534fa3f34fb580c9634d3609493318efb796df9b61ae1437363dc74e01896c7eca291d9d1cac3db85a57c041924f55ff74e756570000000c4941f7a9ce78b76e8a7b6a400a26b96c482bdd077f4f1f4433e3ca4faee62317f2a0b663d6be0f8cbce3e292470382d738d50a07de61188b217f4d57b6ea7b830f7154bfd60e3a74c0f2030b1873afa27ceffa597744a583831a563852647cf1051b8967d6e6f41d552637512c69fd0b001eff0f7f663d7cf5a87ab377056df8517b89a45abee3553a8ff4c3c448ddff1e4cb32d401d5ee2b95e3615f050e7e4eeda4e76ca667840e3acb10a9b627a4b251fa28d23c7c40dc486c50e878914ea844ccc55069d948543dd01d5640db169090fd5ea411dfa796f818438b93ae53f2f3e7b15413868044fd717d4c4c8356023d470898d5d72ae72ba2a8887f8af4ab4dd5167126f47d98b91284108e64e886073ad31173abd2f06f762e29a2bd8ce34a323e7cc9027c7faeecd9d");
-            let mut ref_mut = row_pk.into_ref_mut();
-            ref_mut.payload().write(&data[..]).unwrap();
-            ref_mut.into_packet()
+            row_pk.payload_mut().write(&data[..]).unwrap();
+            row_pk
         };
         decoder.add_row_packets(vec![row_pk].into_iter()).unwrap();
     }

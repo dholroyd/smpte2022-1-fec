@@ -1,10 +1,10 @@
 use rtp_rs::RtpReader;
-use smpte2022_1_fec::heap_pool::HeapPacketRef;
 use smpte2022_1_fec::heap_pool::HeapPool;
 use smpte2022_1_fec::*;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::SocketAddr;
+use smpte2022_1_fec::heap_pool::HeapPacket;
 
 const MAIN: mio::Token = mio::Token(0);
 const FEC_ONE: mio::Token = mio::Token(1);
@@ -14,13 +14,13 @@ const PACKET_SIZE_MAX: usize = 1500;
 const PACKET_COUNT_MAX: usize = 10 * 10 * 2;
 
 struct MyReceiver;
-impl Receiver<HeapPacketRef> for MyReceiver {
-    fn receive(&mut self, packets: impl Iterator<Item = HeapPacketRef>) {
+impl Receiver<HeapPacket> for MyReceiver {
+    fn receive(&mut self, packets: impl Iterator<Item = HeapPacket>) {
         for pk in packets {
-            match RtpReader::new(pk.payload()) {
-                Ok(header) => println!("got packet with seq {:?}", header.sequence_number()),
-                Err(e) => println!("packet error {:?}", e),
-            }
+            //match RtpReader::new(pk.payload()) {
+            //    Ok(header) => println!("got packet with seq {:?}", header.sequence_number()),
+            //    Err(e) => println!("packet error {:?}", e),
+            //}
         }
     }
 }
@@ -74,48 +74,45 @@ fn main() -> Result<(), std::io::Error> {
         for event in &events {
             match event.token() {
                 MAIN => loop {
-                    let pk = buffer_pool.allocate().expect("allocating main buffer");
-                    let mut ref_mut = pk.into_ref_mut();
-                    let size = match main_sock.recv(ref_mut.payload()) {
+                    let mut pk = buffer_pool.allocate().expect("allocating main buffer");
+                    let size = match main_sock.recv(pk.payload_mut()) {
                         Ok(s) => s,
                         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                             break;
                         }
                         e => panic!("err={:?}", e),
                     };
-                    ref_mut.truncate(size);
+                    pk.truncate(size);
                     decoder
-                        .add_main_packets(vec![ref_mut.into_packet()].into_iter())
+                        .add_main_packets(vec![pk].into_iter())
                         .expect("decoding main packet");
                 },
                 FEC_ONE => loop {
-                    let pk = buffer_pool.allocate().expect("allocating main buffer");
-                    let mut ref_mut = pk.into_ref_mut();
-                    let size = match fec_one.recv(ref_mut.payload()) {
+                    let mut pk = buffer_pool.allocate().expect("allocating main buffer");
+                    let size = match fec_one.recv(pk.payload_mut()) {
                         Ok(s) => s,
                         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                             break;
                         }
                         e => panic!("err={:?}", e),
                     };
-                    ref_mut.truncate(size);
+                    pk.truncate(size);
                     decoder
-                        .add_column_packets(vec![ref_mut.into_packet()].into_iter())
+                        .add_column_packets(vec![pk].into_iter())
                         .expect("decoding column packet");
                 },
                 FEC_TWO => loop {
-                    let pk = buffer_pool.allocate().expect("allocating main buffer");
-                    let mut ref_mut = pk.into_ref_mut();
-                    let size = match fec_two.recv(ref_mut.payload()) {
+                    let mut pk = buffer_pool.allocate().expect("allocating main buffer");
+                    let size = match fec_two.recv(pk.payload_mut()) {
                         Ok(s) => s,
                         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                             break;
                         }
                         e => panic!("err={:?}", e),
                     };
-                    ref_mut.truncate(size);
+                    pk.truncate(size);
                     decoder
-                        .add_row_packets(vec![ref_mut.into_packet()].into_iter())
+                        .add_row_packets(vec![pk].into_iter())
                         .expect("decoding row packet");
                 },
                 t => panic!("unexpected {:?}", t),

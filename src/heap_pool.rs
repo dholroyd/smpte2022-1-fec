@@ -58,15 +58,16 @@ pub struct HeapPacket {
     buf: Option<Vec<u8>>,
 }
 impl crate::Packet for HeapPacket {
-    type R = HeapPacketRef;
-    type W = HeapPacketRefMut;
-
-    fn into_ref(self) -> Self::R {
-        HeapPacketRef { pk: self }
+    fn payload(&self) -> &[u8] {
+        &self.buf.as_ref().unwrap()[..]
     }
-
-    fn into_ref_mut(self) -> Self::W {
-        HeapPacketRefMut { pk: self }
+    fn payload_mut(&mut self) -> &mut [u8] {
+        &mut self.buf.as_mut().unwrap()[..]
+    }
+    fn truncate(&mut self, size: usize) {
+        assert_ne!(size, 0);
+        assert!(self.buf.as_ref().unwrap().len() >= size);
+        self.buf.as_mut().unwrap().truncate(size)
     }
 }
 impl Drop for HeapPacket {
@@ -75,69 +76,25 @@ impl Drop for HeapPacket {
     }
 }
 
-pub struct HeapPacketRef {
-    pk: HeapPacket,
-}
-impl crate::PacketRef for HeapPacketRef {
-    type P = HeapPacket;
-
-    fn payload(&self) -> &[u8] {
-        &self.pk.buf.as_ref().unwrap()[..]
-    }
-
-    fn try_into_packet(self) -> Result<HeapPacket, HeapPacketRef> {
-        Ok(self.pk)
-    }
-}
-
-pub struct HeapPacketRefMut {
-    pk: HeapPacket,
-}
-impl crate::PacketRefMut for HeapPacketRefMut {
-    type P = HeapPacket;
-
-    fn payload(&mut self) -> &mut [u8] {
-        &mut self.pk.buf.as_mut().unwrap()[..]
-    }
-
-    fn into_packet(self) -> Self::P {
-        self.pk
-    }
-
-    fn truncate(&mut self, size: usize) {
-        assert_ne!(size, 0);
-        assert!(self.pk.buf.as_ref().unwrap().len() >= size);
-        self.pk.buf.as_mut().unwrap().truncate(size)
-    }
-}
 
 #[cfg(test)]
 mod test {
     use crate::heap_pool::HeapPool;
     use crate::BufferPool;
     use crate::Packet;
-    use crate::PacketRef;
-    use crate::PacketRefMut;
 
     #[test]
     fn it_works() {
         let pool = HeapPool::new(2, 1500);
         {
             let one = pool.allocate().unwrap();
-            let two = pool.allocate().unwrap();
+            let mut two = pool.allocate().unwrap();
             assert!(pool.allocate().is_none());
-            let one_ref = one.into_ref();
-            // now ref_b has been dropped, try_into_packet() should succeed
-            assert!(one_ref.try_into_packet().is_ok());
-
-            let mut two_ref = two.into_ref_mut();
             {
-                let data = two_ref.payload();
+                let data = two.payload_mut();
                 data[0] = 123;
             }
-            let two = two_ref.into_packet();
-            let two_ref = two.into_ref();
-            assert_eq!(123, two_ref.payload()[0]);
+            assert_eq!(123, two.payload()[0]);
         }
         // Now all the above pool usage is done, the allocations should have returned to the pool
         let one = pool.allocate().unwrap();
