@@ -638,7 +638,7 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> Decoder<BP, Recv> {
         //       the state flip-flopping all the time if the FEC streams have mismatched settings.
         match self.state {
             State::Init => panic!("self.state is State::Init"),
-            State::Start(ref buffer_pool, ref receiver) => {
+            State::Start(..) => {
                 if let Ok(geometry) = FecGeometry::from_header(&header) {
                     let width = geometry.d;
                     let height = geometry.l;
