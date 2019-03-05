@@ -241,7 +241,7 @@ impl<P: PacketRef, Recv: Receiver<P>> PacketSequence<P, Recv> {
 /// rolling window of packets already acquired, and using the opportunity of new packets becoming
 /// available to reconstruct any missing packets within the rolling window.
 ///
-/// ```
+/// ```plain
 ///  main packet descriptors
 ///  |
 ///  v            v--- row packet descriptors
