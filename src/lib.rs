@@ -48,7 +48,7 @@ impl FecGeometry {
     const MAX_AREA: u16 = 100;
 
     fn size_of(header: &fec::FecHeader<'_>) -> u16 {
-        (header.number_associated() as u16) * (header.offset() as u16)
+        u16::from(header.number_associated()) * u16::from(header.offset())
     }
 
     fn from_header(header: &fec::FecHeader<'_>) -> Result<FecGeometry, FecGeometryError> {
@@ -337,7 +337,7 @@ impl<BP: BufferPool, Recv: Receiver<<BP::P as Packet>::R>> FecMatrix<BP, Recv> {
         fec_header: &FecHeader<'_>,
     ) -> impl Iterator<Item = (Seq, Option<&<BP::P as Packet>::R>)> {
         let sn_start = ((fec_header.sn_base() & 0xffff) as u16).into();
-        let sn_end = sn_start + fec_header.number_associated() as u16 * fec_header.offset() as u16;
+        let sn_end = sn_start + u16::from(fec_header.number_associated()) * u16::from(fec_header.offset());
 
         (sn_start..sn_end)
             .seq_iter()
