@@ -1,4 +1,3 @@
-use rtp_rs::RtpReader;
 use smpte2022_1_fec::heap_pool::HeapPacket;
 use smpte2022_1_fec::heap_pool::HeapPool;
 use smpte2022_1_fec::*;
