@@ -32,11 +32,7 @@ impl crate::BufferPool for HeapPool {
         // TODO: maybe this should allocate N at once, for efficiency?
 
         let mut state = self.state.borrow_mut();
-        let buf = state.bufs.pop();
-        if buf.is_none() {
-            return None;
-        }
-        let mut buf = buf.unwrap();
+        let mut buf = state.bufs.pop()?;
         // TODO: try to cook up a scheme to avoid zeroing-out the buffer
         //       e.g. https://github.com/tbu-/buffer ?
         buf.clear();
