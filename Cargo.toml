@@ -5,7 +5,7 @@ authors = ["David Holroyd <dave@badgers-in-foil.co.uk>"]
 edition = "2018"
 
 [dependencies]
-smpte2022-1-packet = "0.1.0"
+smpte2022-1-packet = "0.2.0"
 rtp-rs = "0.3.0"
 slab = "0.4"
 
