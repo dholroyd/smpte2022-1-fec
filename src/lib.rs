@@ -175,13 +175,11 @@ impl<P: PacketRef, Recv: Receiver<P>> PacketSequence<P, Recv> {
             }
             if last_seq < seq {
                 self.packets.push_back(SeqEntry { seq, pk: Some(pk) });
-            } else {
-                if let Some(p) = self.packets
+            } else if let Some(p) = self.packets
                     .iter_mut()
                     .find(|p| p.seq == seq)
-                {
-                    p.pk = Some(pk);
-                }
+            {
+                p.pk = Some(pk);
             }
         } else {
             self.packets.push_back(SeqEntry { seq, pk: Some(pk) });
