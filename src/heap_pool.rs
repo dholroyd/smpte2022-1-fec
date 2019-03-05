@@ -41,7 +41,7 @@ impl crate::BufferPool for HeapPool {
         buf.resize(state.packet_size, 0);
         Some(HeapPacket {
             state: self.state.clone(),
-            buf,
+            buf: Some(buf),
         })
     }
 }
@@ -55,7 +55,9 @@ impl Clone for HeapPool {
 
 pub struct HeapPacket {
     state: Rc<cell::RefCell<PoolState>>,
-    buf: Vec<u8>,
+    // the Vec is wrapped in an Option simply so that we can extract it and pass it by value back
+    // to the Heap pool in the Drop impl.  buf will be 'Some' at all other times.
+    buf: Option<Vec<u8>>,
 }
 impl crate::Packet for HeapPacket {
     type R = HeapPacketRef;
@@ -63,7 +65,7 @@ impl crate::Packet for HeapPacket {
 
     fn into_ref(self) -> Self::R {
         HeapPacketRef {
-            pk: Rc::new(self),
+            pk: self,
         }
     }
 
@@ -75,24 +77,22 @@ impl crate::Packet for HeapPacket {
 }
 impl Drop for HeapPacket {
     fn drop(&mut self) {
-        self.state.borrow_mut().bufs.push(self.buf.clone())
+        self.state.borrow_mut().bufs.push(self.buf.take().unwrap())
     }
 }
 
-#[derive(Clone)]
 pub struct HeapPacketRef {
-    pk: Rc<HeapPacket>,
+    pk: HeapPacket,
 }
 impl crate::PacketRef for HeapPacketRef {
     type P = HeapPacket;
 
     fn payload(&self) -> &[u8] {
-        &self.pk.buf[..]
+        &self.pk.buf.as_ref().unwrap()[..]
     }
 
     fn try_into_packet(self) -> Result<HeapPacket, HeapPacketRef> {
-        Rc::try_unwrap(self.pk)
-            .map_err(|e| HeapPacketRef { pk: e })
+        Ok(self.pk)
     }
 }
 
@@ -103,7 +103,7 @@ impl crate::PacketRefMut for HeapPacketRefMut {
     type P = HeapPacket;
 
     fn payload(&mut self) -> &mut[u8] {
-        &mut self.pk.buf[..]
+        &mut self.pk.buf.as_mut().unwrap()[..]
     }
 
     fn into_packet(self) -> Self::P {
@@ -112,8 +112,8 @@ impl crate::PacketRefMut for HeapPacketRefMut {
 
     fn truncate(&mut self, size: usize) {
         assert_ne!(size, 0);
-        assert!(self.pk.buf.len() >= size);
-        self.pk.buf.truncate(size)
+        assert!(self.pk.buf.as_ref().unwrap().len() >= size);
+        self.pk.buf.as_mut().unwrap().truncate(size)
     }
 }
 
@@ -132,14 +132,7 @@ mod test {
             let one = pool.allocate().unwrap();
             let two = pool.allocate().unwrap();
             assert!(pool.allocate().is_none());
-            let one_ref = {
-                let one_ref = one.into_ref();
-                let one_ref_b = one_ref.clone();
-                // will not be able to get the packet back again while one_ref_b also exits
-                let res = one_ref.try_into_packet();
-                assert!(res.is_err());
-                res.err().unwrap()
-            };
+            let one_ref = one.into_ref();
             // now ref_b has been dropped, try_into_packet() should succeed
             assert!(one_ref.try_into_packet().is_ok());
 

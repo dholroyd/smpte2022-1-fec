@@ -90,7 +90,7 @@ pub trait Packet: Sized {
     fn into_ref(self) -> Self::R;
     fn into_ref_mut(self) -> Self::W;
 }
-pub trait PacketRef: Clone {
+pub trait PacketRef: Sized {
     type P: Packet;
 
     fn payload(&self) -> &[u8];
