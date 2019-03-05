@@ -1,5 +1,5 @@
-use std::rc::Rc;
 use std::cell;
+use std::rc::Rc;
 
 struct PoolState {
     bufs: Vec<Vec<u8>>,
@@ -7,7 +7,7 @@ struct PoolState {
 }
 
 pub struct HeapPool {
-    state: Rc<cell::RefCell<PoolState>>
+    state: Rc<cell::RefCell<PoolState>>,
 }
 impl HeapPool {
     pub fn new(packet_count: usize, packet_size: usize) -> HeapPool {
@@ -15,12 +15,14 @@ impl HeapPool {
             state: Rc::new(cell::RefCell::new(PoolState {
                 bufs: Self::mk_bufs(packet_count, packet_size),
                 packet_size,
-            }))
+            })),
         }
     }
 
     fn mk_bufs(packet_count: usize, packet_size: usize) -> Vec<Vec<u8>> {
-        (0..packet_count).map(|_| Vec::with_capacity(packet_size) ).collect()
+        (0..packet_count)
+            .map(|_| Vec::with_capacity(packet_size))
+            .collect()
     }
 }
 impl crate::BufferPool for HeapPool {
@@ -64,15 +66,11 @@ impl crate::Packet for HeapPacket {
     type W = HeapPacketRefMut;
 
     fn into_ref(self) -> Self::R {
-        HeapPacketRef {
-            pk: self,
-        }
+        HeapPacketRef { pk: self }
     }
 
     fn into_ref_mut(self) -> Self::W {
-        HeapPacketRefMut {
-            pk: self,
-        }
+        HeapPacketRefMut { pk: self }
     }
 }
 impl Drop for HeapPacket {
@@ -102,7 +100,7 @@ pub struct HeapPacketRefMut {
 impl crate::PacketRefMut for HeapPacketRefMut {
     type P = HeapPacket;
 
-    fn payload(&mut self) -> &mut[u8] {
+    fn payload(&mut self) -> &mut [u8] {
         &mut self.pk.buf.as_mut().unwrap()[..]
     }
 
@@ -122,8 +120,8 @@ mod test {
     use crate::heap_pool::HeapPool;
     use crate::BufferPool;
     use crate::Packet;
-    use crate::PacketRefMut;
     use crate::PacketRef;
+    use crate::PacketRefMut;
 
     #[test]
     fn it_works() {
