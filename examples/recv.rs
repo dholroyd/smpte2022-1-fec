@@ -1,10 +1,10 @@
 use rtp_rs::RtpReader;
+use smpte2022_1_fec::heap_pool::HeapPacket;
 use smpte2022_1_fec::heap_pool::HeapPool;
 use smpte2022_1_fec::*;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::SocketAddr;
-use smpte2022_1_fec::heap_pool::HeapPacket;
 
 const MAIN: mio::Token = mio::Token(0);
 const FEC_ONE: mio::Token = mio::Token(1);

@@ -156,10 +156,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             }
             if last_seq < seq {
                 self.packets.push_back(SeqEntry { seq, pk: Some(pk) });
-            } else if let Some(p) = self.packets
-                    .iter_mut()
-                    .find(|p| p.seq == seq)
-            {
+            } else if let Some(p) = self.packets.iter_mut().find(|p| p.seq == seq) {
                 p.pk = Some(pk);
             }
         } else {
@@ -313,7 +310,8 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         fec_header: &FecHeader<'_>,
     ) -> impl Iterator<Item = (Seq, Option<&BP::P>)> {
         let sn_start = ((fec_header.sn_base() & 0xffff) as u16).into();
-        let sn_end = sn_start + u16::from(fec_header.number_associated()) * u16::from(fec_header.offset());
+        let sn_end =
+            sn_start + u16::from(fec_header.number_associated()) * u16::from(fec_header.offset());
 
         (sn_start..sn_end)
             .seq_iter()
@@ -543,10 +541,8 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
             // TODO: check that:
             //       - CSRC is not used
             //       - extension usage is unchanging
-            self.state.insert_main_packet(
-                rtp_header.sequence_number(),
-                p,
-            )?;
+            self.state
+                .insert_main_packet(rtp_header.sequence_number(), p)?;
         }
         Ok(())
     }
@@ -565,17 +561,13 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
                 });
             }
             self.merge_fec_parameters(fec_header);
-            let mut recovered = self.state.insert_row_packet(
-                rtp_header.sequence_number(),
-                p,
-            )?;
+            let mut recovered = self
+                .state
+                .insert_row_packet(rtp_header.sequence_number(), p)?;
             while let Some(pk) = recovered {
                 let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
                 let seq = rtp_header.sequence_number();
-                recovered = self.state.insert_main_packet(
-                    seq,
-                    pk,
-                )?;
+                recovered = self.state.insert_main_packet(seq, pk)?;
             }
         }
         Ok(())
@@ -595,10 +587,8 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
                 });
             }
             self.merge_fec_parameters(fec_header);
-            self.state.insert_column_packet(
-                rtp_header.sequence_number(),
-                p,
-            )?;
+            self.state
+                .insert_column_packet(rtp_header.sequence_number(), p)?;
         }
         Ok(())
     }
@@ -637,10 +627,10 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::heap_pool::HeapPacket;
     use crate::heap_pool::HeapPool;
     use hex_literal::*;
     use std::io::Write;
-    use crate::heap_pool::HeapPacket;
 
     struct TestReceiver;
     impl Receiver<HeapPacket> for TestReceiver {

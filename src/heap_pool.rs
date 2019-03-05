@@ -76,7 +76,6 @@ impl Drop for HeapPacket {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     use crate::heap_pool::HeapPool;
