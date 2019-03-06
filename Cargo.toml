@@ -12,7 +12,6 @@ edition = "2018"
 [dependencies]
 smpte2022-1-packet = "0.2.0"
 rtp-rs = "0.3.0"
-slab = "0.4"
 
 [dev-dependencies]
 hex-literal = "0.1"
