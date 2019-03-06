@@ -2,6 +2,10 @@
 name = "smpte2022-1-fec"
 version = "0.1.0"
 authors = ["David Holroyd <dave@badgers-in-foil.co.uk>"]
+description = "Decoder for SMPTE 2022-1 FEC protected data"
+repository = "https://github.com/dholroyd/smpte2022-1-fec"
+categories = [ "multimedia::video", "parser-implementations", "network-programming" ]
+keywords = [ "2dparityfec", "prompeg", "SMPTE-2022-1" ]
 license = "MIT/Apache-2.0"
 edition = "2018"
 
