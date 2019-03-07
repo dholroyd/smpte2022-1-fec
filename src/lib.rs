@@ -192,11 +192,15 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
     }
 
     fn get_by_seq(&self, seq: Seq) -> Option<&P> {
-        // TODO: we can locate the item directly without searching
-        self.packets
-            .iter()
-            .find(|p| p.seq == seq)
-            .and_then(|p| p.pk.as_ref())
+        self.front_seq()
+            .and_then(|base| {
+                let diff = seq - base;
+                if diff >=0 && (diff as usize) < self.packets.len() {
+                    self.packets[diff as usize].pk.as_ref()
+                } else {
+                    None
+                }
+            })
     }
 
     fn remove_outdated(&mut self, seq_new: Seq, seq_base: Seq) {
