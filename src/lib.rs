@@ -361,6 +361,8 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
                 }
             }
             let mut rtp = RtpHeaderMut::new(payload);
+            // pretend that the RTP version is '2',
+            rtp.set_version(2);
             rtp.set_timestamp(ts_recover);
             rtp.set_sequence(seq);
             // TODO: report the recovery to the 'Receiver' instance
@@ -397,6 +399,10 @@ impl RtpHeaderMut<'_> {
     fn new(buf: &mut [u8]) -> RtpHeaderMut<'_> {
         assert!(buf.len() >= RtpReader::MIN_HEADER_LEN);
         RtpHeaderMut(buf)
+    }
+    fn set_version(&mut self, v: u8) {
+        assert!(v <= 0b11);
+        self.0[0] = self.0[0] & 0b00111111 | (v << 6);
     }
     fn set_sequence(&mut self, seq: Seq) {
         let s: u16 = seq.into();
