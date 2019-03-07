@@ -162,9 +162,11 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
         } else {
             self.packets.push_back(SeqEntry { seq, pk: Some(pk) });
         }
+        #[cfg(debug_assertions)]
         self.check();
     }
 
+    #[cfg(debug_assertions)]
     fn check(&self) {
         assert!(
             self.packets.len() <= self.size_limit,
