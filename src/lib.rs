@@ -500,7 +500,7 @@ impl RtpHeaderMut<'_> {
     }
     fn set_version(&mut self, v: u8) {
         assert!(v <= 0b11);
-        self.0[0] = self.0[0] & 0b00111111 | (v << 6);
+        self.0[0] = self.0[0] & 0b0011_1111 | (v << 6);
     }
     fn set_sequence(&mut self, seq: Seq) {
         let s: u16 = seq.into();
