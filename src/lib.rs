@@ -121,6 +121,7 @@ struct PacketSequence<P: Packet, Recv: Receiver<P>> {
     size_limit: usize,
     packets: VecDeque<SeqEntry<P>>,
     recv: Recv,
+    seq_gone_backwards_count: usize,
 }
 impl<P: Packet> PacketSequence<P, NilReceiver<P>> {
     pub fn new(size_limit: usize) -> PacketSequence<P, NilReceiver<P>> {
@@ -130,15 +131,19 @@ impl<P: Packet> PacketSequence<P, NilReceiver<P>> {
             recv: NilReceiver {
                 phantom: marker::PhantomData,
             },
+            seq_gone_backwards_count: 0,
         }
     }
 }
 impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
+    const SEQ_GONE_BACKWARDS_LIMIT: usize = 64;
+
     pub fn new_with_receiver(size_limit: usize, recv: Recv) -> PacketSequence<P, Recv> {
         PacketSequence {
             size_limit,
             packets: VecDeque::with_capacity(size_limit),
             recv,
+            seq_gone_backwards_count: 0,
         }
     }
 
@@ -155,9 +160,28 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
                 }
             }
             if last_seq < seq {
+                self.seq_gone_backwards_count = 0;
                 self.packets.push_back(SeqEntry { seq, pk: Some(pk) });
             } else if let Some(p) = self.packets.iter_mut().find(|p| p.seq == seq) {
+                self.seq_gone_backwards_count = 0;
                 p.pk = Some(pk);
+            } else {
+                // Packets with a sequence number that is 'too early' will be dropped, however
+                // that alone could mean that if the sequence numbers are reset by the sender
+                // (e.g. the sender is restarted), then we would drop all packets sent util
+                // we get to this point in the sequence again.  Therefore, after
+                // SEQ_GONE_BACKWARDS_LIMIT packets have been received with with a 'too early'
+                // sequence number, we assume that the sender was restarted and reset all our
+                // state, so that we can start successfully processing received packets in the
+                // new sequence.
+                self.seq_gone_backwards_count += 1;
+                if self.seq_gone_backwards_count >= Self::SEQ_GONE_BACKWARDS_LIMIT {
+                    eprintln!("eariest buffered packet has {:?}, but recieved {} with an earlier sequence number (most recently {:?}), resetting buffer",
+                              self.front_seq(),
+                              self.seq_gone_backwards_count,
+                              seq);
+                    self.reset();
+                }
             }
         } else {
             self.packets.push_back(SeqEntry { seq, pk: Some(pk) });
@@ -201,6 +225,11 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
                     None
                 }
             })
+    }
+
+    fn reset(&mut self) {
+        self.seq_gone_backwards_count = 0;
+        self.recv.receive(self.packets.drain(..).filter_map(|e| e.pk));
     }
 
     fn remove_outdated(&mut self, seq_new: Seq, seq_base: Seq) {
