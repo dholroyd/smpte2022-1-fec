@@ -12,9 +12,9 @@ use rtp_rs::RtpReader;
 use rtp_rs::Seq;
 use smpte2022_1_packet as fec;
 use smpte2022_1_packet::FecHeader;
+use smpte2022_1_packet::Orientation;
 use std::collections::VecDeque;
 use std::marker;
-use smpte2022_1_packet::Orientation;
 
 pub trait Receiver<P: Packet> {
     fn receive(&mut self, packets: impl Iterator<Item = P>);
@@ -126,9 +126,12 @@ struct PacketSequence<P: Packet, Recv: Receiver<P>> {
 }
 impl<P: Packet> PacketSequence<P, NilReceiver<P>> {
     pub fn new(size_limit: usize) -> PacketSequence<P, NilReceiver<P>> {
-        Self::new_with_receiver(size_limit, NilReceiver {
-            phantom: marker::PhantomData,
-        })
+        Self::new_with_receiver(
+            size_limit,
+            NilReceiver {
+                phantom: marker::PhantomData,
+            },
+        )
     }
 }
 impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
@@ -158,7 +161,8 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             if last_seq < seq {
                 self.seq_gone_backwards_count = 0;
                 self.packets.push_back(SeqEntry { seq, pk: Some(pk) });
-            } else if let Some(p) = self.packets.iter_mut().find(|p| p.seq == seq) {   // TODO: can be O(1) rather than O(n)
+            } else if let Some(p) = self.packets.iter_mut().find(|p| p.seq == seq) {
+                // TODO: can be O(1) rather than O(n)
                 self.seq_gone_backwards_count = 0;
                 p.pk = Some(pk);
             } else {
@@ -212,20 +216,20 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
     }
 
     fn get_by_seq(&self, seq: Seq) -> Option<&P> {
-        self.front_seq()
-            .and_then(|base| {
-                let diff = seq - base;
-                if diff >=0 && (diff as usize) < self.packets.len() {
-                    self.packets[diff as usize].pk.as_ref()
-                } else {
-                    None
-                }
-            })
+        self.front_seq().and_then(|base| {
+            let diff = seq - base;
+            if diff >= 0 && (diff as usize) < self.packets.len() {
+                self.packets[diff as usize].pk.as_ref()
+            } else {
+                None
+            }
+        })
     }
 
     fn reset(&mut self) {
         self.seq_gone_backwards_count = 0;
-        self.recv.receive(self.packets.drain(..).filter_map(|e| e.pk));
+        self.recv
+            .receive(self.packets.drain(..).filter_map(|e| e.pk));
     }
 
     fn remove_outdated(&mut self, seq_new: Seq, seq_base: Seq) {
@@ -236,7 +240,10 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             let drain = if to_remove >= self.packets.len() {
                 println!(
                     "Large jump {} receiving {:?}, while extent is {:?}-{:?}",
-                    seq_delta, seq_new, seq_base, self.back_seq().unwrap()
+                    seq_delta,
+                    seq_new,
+                    seq_base,
+                    self.back_seq().unwrap()
                 );
                 self.packets.drain(..)
             } else {
@@ -294,7 +301,11 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
     // TODO: Explicitly report to calling code the SN values for packets definitely lost.
     //       Support calling code collecting stats about number of losses + corrections.
 
-    pub fn insert(&mut self, seq: rtp_rs::Seq, pk: BP::P) -> Result<Corrections<BP::P>, FecDecodeError> {
+    pub fn insert(
+        &mut self,
+        seq: rtp_rs::Seq,
+        pk: BP::P,
+    ) -> Result<Corrections<BP::P>, FecDecodeError> {
         self.main_descriptors.insert(seq, pk);
 
         // if we already have FEC packets covering this media packet (because things arrived out
@@ -304,27 +315,36 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         if let Some(fec_seq) = Self::find_associated_fec_packet(&self.col_descriptors, seq) {
             self.maybe_correct(Orientation::Column, fec_seq);
         }
-        Ok(match (self.look_for_col_correction(seq), self.look_for_row_correction(seq)) {
-            (None, None) => Corrections::None,
-            (Some(a), None) => Corrections::One(a),
-            (None, Some(b)) => Corrections::One(b),
-            (Some(a), Some(b)) => Corrections::Two(a, b),
-        })
+        Ok(
+            match (
+                self.look_for_col_correction(seq),
+                self.look_for_row_correction(seq),
+            ) {
+                (None, None) => Corrections::None,
+                (Some(a), None) => Corrections::One(a),
+                (None, Some(b)) => Corrections::One(b),
+                (Some(a), Some(b)) => Corrections::Two(a, b),
+            },
+        )
     }
 
     fn find_associated_fec_packet(
-        fec_descriptors: &PacketSequence<BP::P,
-        NilReceiver<BP::P>>,
-        media_seq: rtp_rs::Seq
+        fec_descriptors: &PacketSequence<BP::P, NilReceiver<BP::P>>,
+        media_seq: rtp_rs::Seq,
     ) -> Option<rtp_rs::Seq> {
-        fec_descriptors.packets
+        fec_descriptors
+            .packets
             .iter()
-            .filter_map(|e| e.pk.as_ref().map(|r| (e.seq, r) ) )   // entries with non-None packets
-            .filter_map(|(seq, pk)| rtp_rs::RtpReader::new(pk.payload()).ok().map(|rtp| (seq, rtp) ) )
-            .map(|(seq, rtp)| (seq, fec::FecHeader::split_from_bytes(rtp.payload())) )
-            .filter_map(|(seq, hdr)| hdr.ok().map(|(hdr, _pay)| (seq, hdr)) )
-            .find(|(_seq, hdr)| hdr.associates_with(media_seq) )
-            .map(|(seq, _hdr)| seq )
+            .filter_map(|e| e.pk.as_ref().map(|r| (e.seq, r))) // entries with non-None packets
+            .filter_map(|(seq, pk)| {
+                rtp_rs::RtpReader::new(pk.payload())
+                    .ok()
+                    .map(|rtp| (seq, rtp))
+            })
+            .map(|(seq, rtp)| (seq, fec::FecHeader::split_from_bytes(rtp.payload())))
+            .filter_map(|(seq, hdr)| hdr.ok().map(|(hdr, _pay)| (seq, hdr)))
+            .find(|(_seq, hdr)| hdr.associates_with(media_seq))
+            .map(|(seq, _hdr)| seq)
     }
 
     fn look_for_col_correction(&mut self, seq: rtp_rs::Seq) -> Option<BP::P> {
@@ -402,11 +422,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         missing_seq
     }
 
-    fn maybe_correct(
-        &mut self,
-        orientation: Orientation,
-        seq: Seq,
-    ) -> Option<BP::P> {
+    fn maybe_correct(&mut self, orientation: Orientation, seq: Seq) -> Option<BP::P> {
         let udp_pk = match orientation {
             Orientation::Row => self.row_descriptors.get_by_seq(seq),
             Orientation::Column => self.col_descriptors.get_by_seq(seq),
@@ -433,7 +449,12 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         }
     }
 
-    fn perform_correction(&self, fec_header: &FecHeader<'_>, fec_payload: &[u8], seq: Seq) -> Option<<BP as BufferPool>::P> {
+    fn perform_correction(
+        &self,
+        fec_header: &FecHeader<'_>,
+        fec_payload: &[u8],
+        seq: Seq,
+    ) -> Option<<BP as BufferPool>::P> {
         let recovered = self.buffer_pool.allocate();
         if recovered.is_none() {
             eprintln!("failed to allocate buffer from pool");
@@ -456,7 +477,10 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
             }
         }
         if len_recover as usize <= RtpReader::MIN_HEADER_LEN {
-            println!("recovered packet len too small {} after attempt to recover {:?}", len_recover, seq);
+            println!(
+                "recovered packet len too small {} after attempt to recover {:?}",
+                len_recover, seq
+            );
             return None;
         }
         let mut rtp = RtpHeaderMut::new(payload);
@@ -573,15 +597,18 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> State<BP, Recv> {
             match matrix.insert(seq, pk)? {
                 Corrections::None => (),
                 Corrections::One(a) => {
-                    recovered.try_push(a)
-                        .map_err(|_e| FecDecodeError::NoSpaceForRecovered )?;
-                },
+                    recovered
+                        .try_push(a)
+                        .map_err(|_e| FecDecodeError::NoSpaceForRecovered)?;
+                }
                 Corrections::Two(a, b) => {
-                    recovered.try_push(a)
-                        .map_err(|_e| FecDecodeError::NoSpaceForRecovered )?;
-                    recovered.try_push(b)
-                        .map_err(|_e| FecDecodeError::NoSpaceForRecovered )?;
-                },
+                    recovered
+                        .try_push(a)
+                        .map_err(|_e| FecDecodeError::NoSpaceForRecovered)?;
+                    recovered
+                        .try_push(b)
+                        .map_err(|_e| FecDecodeError::NoSpaceForRecovered)?;
+                }
             }
         }
         Ok(())
@@ -596,8 +623,9 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> State<BP, Recv> {
         // if not Running, there's nothing to do
         if let State::Running { ref mut matrix, .. } = self {
             if let Some(pk) = matrix.insert_column(seq, pk)? {
-                recovered.try_push(pk)
-                    .map_err(|_e| FecDecodeError::NoSpaceForRecovered )?
+                recovered
+                    .try_push(pk)
+                    .map_err(|_e| FecDecodeError::NoSpaceForRecovered)?
             }
         }
         Ok(())
@@ -612,8 +640,9 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> State<BP, Recv> {
         // if not Running, there's nothing to do
         if let State::Running { ref mut matrix, .. } = self {
             if let Some(pk) = matrix.insert_row(seq, pk)? {
-                recovered.try_push(pk)
-                    .map_err(|_e| FecDecodeError::NoSpaceForRecovered )?
+                recovered
+                    .try_push(pk)
+                    .map_err(|_e| FecDecodeError::NoSpaceForRecovered)?
             }
         }
         Ok(())
@@ -752,8 +781,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
                 }
             }
             State::Running {
-                ref mut geometry,
-                ..
+                ref mut geometry, ..
             } => {
                 if !geometry.matches(&header) {
                     let geom = FecGeometry::from_header(&header).unwrap(); // FIXME
