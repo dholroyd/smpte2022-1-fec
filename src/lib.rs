@@ -107,7 +107,7 @@ struct NilReceiver<P: Packet> {
     phantom: marker::PhantomData<P>,
 }
 impl<P: Packet> Receiver<P> for NilReceiver<P> {
-    fn receive(&mut self, packets: impl Iterator<Item = P>) {}
+    fn receive(&mut self, _packets: impl Iterator<Item = P>) {}
 }
 
 struct SeqEntry<P: Packet> {
@@ -623,7 +623,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
             }
             State::Running {
                 ref mut geometry,
-                ref matrix,
+                ..
             } => {
                 if !geometry.matches(&header) {
                     let geom = FecGeometry::from_header(&header).unwrap(); // FIXME
@@ -646,7 +646,7 @@ mod tests {
 
     struct TestReceiver;
     impl Receiver<HeapPacket> for TestReceiver {
-        fn receive(&mut self, packets: impl Iterator<Item = HeapPacket>) {
+        fn receive(&mut self, _packets: impl Iterator<Item = HeapPacket>) {
             unimplemented!()
         }
     }

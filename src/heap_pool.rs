@@ -86,7 +86,7 @@ mod test {
     fn it_works() {
         let pool = HeapPool::new(2, 1500);
         {
-            let one = pool.allocate().unwrap();
+            let _one = pool.allocate().unwrap();
             let mut two = pool.allocate().unwrap();
             assert!(pool.allocate().is_none());
             {
@@ -96,8 +96,8 @@ mod test {
             assert_eq!(123, two.payload()[0]);
         }
         // Now all the above pool usage is done, the allocations should have returned to the pool
-        let one = pool.allocate().unwrap();
-        let two = pool.allocate().unwrap();
+        let _one = pool.allocate().unwrap();
+        let _two = pool.allocate().unwrap();
         assert!(pool.allocate().is_none());
     }
 }
