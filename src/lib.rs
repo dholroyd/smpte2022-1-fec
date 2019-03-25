@@ -14,6 +14,7 @@ use smpte2022_1_packet as fec;
 use smpte2022_1_packet::FecHeader;
 use std::collections::VecDeque;
 use std::marker;
+use smpte2022_1_packet::Orientation;
 
 pub trait Receiver<P: Packet> {
     fn receive(&mut self, packets: impl Iterator<Item = P>);
@@ -125,14 +126,9 @@ struct PacketSequence<P: Packet, Recv: Receiver<P>> {
 }
 impl<P: Packet> PacketSequence<P, NilReceiver<P>> {
     pub fn new(size_limit: usize) -> PacketSequence<P, NilReceiver<P>> {
-        PacketSequence {
-            size_limit,
-            packets: VecDeque::with_capacity(size_limit),
-            recv: NilReceiver {
-                phantom: marker::PhantomData,
-            },
-            seq_gone_backwards_count: 0,
-        }
+        Self::new_with_receiver(size_limit, NilReceiver {
+            phantom: marker::PhantomData,
+        })
     }
 }
 impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
@@ -162,7 +158,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             if last_seq < seq {
                 self.seq_gone_backwards_count = 0;
                 self.packets.push_back(SeqEntry { seq, pk: Some(pk) });
-            } else if let Some(p) = self.packets.iter_mut().find(|p| p.seq == seq) {
+            } else if let Some(p) = self.packets.iter_mut().find(|p| p.seq == seq) {   // TODO: can be O(1) rather than O(n)
                 self.seq_gone_backwards_count = 0;
                 p.pk = Some(pk);
             } else {
@@ -235,19 +231,27 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
     fn remove_outdated(&mut self, seq_new: Seq, seq_base: Seq) {
         let seq_delta = seq_new - seq_base;
         if seq_delta > 0 && seq_delta as usize >= self.size_limit {
+            // last index inclusive to be removed (so '0' means just remove the first item)
             let to_remove = seq_delta as usize - self.size_limit;
             let drain = if to_remove >= self.packets.len() {
                 println!(
-                    "Large jump {} in seq from start={:?} to latest={:?}",
-                    seq_delta, seq_base, seq_new
+                    "Large jump {} receiving {:?}, while extent is {:?}-{:?}",
+                    seq_delta, seq_new, seq_base, self.back_seq().unwrap()
                 );
                 self.packets.drain(..)
             } else {
                 self.packets.drain(0..=to_remove)
             };
+            // TODO: return the iterator and have caller invoke receive()
             self.recv.receive(drain.filter_map(|e| e.pk));
         }
     }
+}
+
+enum Corrections<P: Packet> {
+    None,
+    One(P),
+    Two(P, P),
 }
 
 /// Tracks the current state of the Forward Error Correction process, holding references to a
@@ -290,25 +294,53 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
     // TODO: Explicitly report to calling code the SN values for packets definitely lost.
     //       Support calling code collecting stats about number of losses + corrections.
 
-    pub fn insert(&mut self, seq: rtp_rs::Seq, pk: BP::P) -> Result<Option<BP::P>, FecDecodeError> {
+    pub fn insert(&mut self, seq: rtp_rs::Seq, pk: BP::P) -> Result<Corrections<BP::P>, FecDecodeError> {
         self.main_descriptors.insert(seq, pk);
 
         // if we already have FEC packets covering this media packet (because things arrived out
         // of sequence) then the arrival of this packet may now make it possible to apply a
         // correction, so search for those opportunities in the row + column to which the packet
         // belongs,
-        self.look_for_col_correction(seq);
-        self.look_for_row_correction(seq);
-        // TODO: return any regenerated packets!  Will need a way to produce more than one
-        Ok(None)
+        if let Some(fec_seq) = Self::find_associated_fec_packet(&self.col_descriptors, seq) {
+            self.maybe_correct(Orientation::Column, fec_seq);
+        }
+        Ok(match (self.look_for_col_correction(seq), self.look_for_row_correction(seq)) {
+            (None, None) => Corrections::None,
+            (Some(a), None) => Corrections::One(a),
+            (None, Some(b)) => Corrections::One(b),
+            (Some(a), Some(b)) => Corrections::Two(a, b),
+        })
     }
 
-    fn look_for_col_correction(&mut self, seq: rtp_rs::Seq) {
-        //unimplemented!()
+    fn find_associated_fec_packet(
+        fec_descriptors: &PacketSequence<BP::P,
+        NilReceiver<BP::P>>,
+        media_seq: rtp_rs::Seq
+    ) -> Option<rtp_rs::Seq> {
+        fec_descriptors.packets
+            .iter()
+            .filter_map(|e| e.pk.as_ref().map(|r| (e.seq, r) ) )   // entries with non-None packets
+            .filter_map(|(seq, pk)| rtp_rs::RtpReader::new(pk.payload()).ok().map(|rtp| (seq, rtp) ) )
+            .map(|(seq, rtp)| (seq, fec::FecHeader::split_from_bytes(rtp.payload())) )
+            .filter_map(|(seq, hdr)| hdr.ok().map(|(hdr, _pay)| (seq, hdr)) )
+            .find(|(_seq, hdr)| hdr.associates_with(media_seq) )
+            .map(|(seq, _hdr)| seq )
     }
 
-    fn look_for_row_correction(&mut self, seq: rtp_rs::Seq) {
-        //unimplemented!()
+    fn look_for_col_correction(&mut self, seq: rtp_rs::Seq) -> Option<BP::P> {
+        if let Some(fec_seq) = Self::find_associated_fec_packet(&self.col_descriptors, seq) {
+            self.maybe_correct(Orientation::Column, fec_seq)
+        } else {
+            None
+        }
+    }
+
+    fn look_for_row_correction(&mut self, seq: rtp_rs::Seq) -> Option<BP::P> {
+        if let Some(fec_seq) = Self::find_associated_fec_packet(&self.row_descriptors, seq) {
+            self.maybe_correct(Orientation::Row, fec_seq)
+        } else {
+            None
+        }
     }
 
     pub fn insert_column(
@@ -316,12 +348,8 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         seq: rtp_rs::Seq,
         pk: BP::P,
     ) -> Result<Option<BP::P>, FecDecodeError> {
-        let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
-        let (fec_header, fec_payload) = fec::FecHeader::split_from_bytes(rtp_header.payload())?;
-
-        let res = self.maybe_correct(fec_header, fec_payload);
-
         self.col_descriptors.insert(seq, pk);
+        let res = self.maybe_correct(Orientation::Column, seq);
         Ok(res)
     }
 
@@ -330,12 +358,8 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         seq: rtp_rs::Seq,
         pk: BP::P,
     ) -> Result<Option<BP::P>, FecDecodeError> {
-        let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
-        let (fec_header, fec_payload) = fec::FecHeader::split_from_bytes(rtp_header.payload())?;
-
-        let res = self.maybe_correct(fec_header, fec_payload);
-
         self.row_descriptors.insert(seq, pk);
+        let res = self.maybe_correct(Orientation::Row, seq);
         Ok(res)
     }
 
@@ -355,8 +379,19 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
     }
 
     fn find_single_missing_associated(&self, fec_header: &FecHeader<'_>) -> Option<Seq> {
+        let front_seq = self.main_descriptors.front_seq()?;
         let mut missing_seq = None;
         for (seq, pk) in self.iter_associated(&fec_header) {
+            if seq < front_seq {
+                // if the FEC packet we are considering covers packets earlier than the earliest
+                // packet in the matrix, then we mustn't try to recover, since we will not insert
+                // packets earlier than the first packet (either a proper packet, or a placeholder)
+                // if we let this happen, it can cause an infinite loop trying to recover this
+                // packet that we never actually accept.
+                // TODO: maybe just allow inserting at the start of the matrix so that we don't
+                //       need this condition here
+                continue;
+            }
             if pk.is_none() {
                 match missing_seq {
                     Some(_) => return None, // can't recover if more than 1 missing
@@ -367,54 +402,82 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         missing_seq
     }
 
-    fn maybe_correct<'a>(
+    fn maybe_correct(
         &mut self,
-        fec_header: FecHeader<'a>,
-        fec_payload: &'a [u8],
+        orientation: Orientation,
+        seq: Seq,
     ) -> Option<BP::P> {
-        let missing_seq = self.find_single_missing_associated(&fec_header);
-        if let Some(seq) = missing_seq {
-            let recovered = self.buffer_pool.allocate();
-            if recovered.is_none() {
-                eprintln!("failed to allocate buffer from pool");
+        let udp_pk = match orientation {
+            Orientation::Row => self.row_descriptors.get_by_seq(seq),
+            Orientation::Column => self.col_descriptors.get_by_seq(seq),
+        }?;
+        let rtp_pk = match rtp_rs::RtpReader::new(udp_pk.payload()) {
+            Ok(res) => res,
+            Err(e) => {
+                eprintln!("{:?}: {:?}", orientation, e);
                 return None;
             }
-            let mut recovered = recovered.unwrap();
-            recovered.truncate(fec_payload.len() + 12);
-            let payload = recovered.payload_mut();
-            // the 'payload' of the FEC packet protects the payload of the media packets, but
-            // not the headers, also prompeg disallows CSRC
-            payload[12..].copy_from_slice(fec_payload);
-            let mut len_recover = fec_header.length_recovery();
-            let mut ts_recover = fec_header.ts_recovery() + 12;
-            for (_, pk) in self.iter_associated(&fec_header) {
-                if let Some(pk) = pk {
-                    Self::xor(payload, pk.payload());
-                    len_recover ^= pk.payload().len() as u16;
-                    let rtp = RtpReader::new(pk.payload()).unwrap();
-                    ts_recover ^= rtp.timestamp();
-                }
+        };
+        let (fec_header, fec_payload) = match FecHeader::split_from_bytes(rtp_pk.payload()) {
+            Ok(res) => res,
+            Err(e) => {
+                eprintln!("{:?}: {:?}", orientation, e);
+                return None;
             }
-            let mut rtp = RtpHeaderMut::new(payload);
-            // pretend that the RTP version is '2',
-            rtp.set_version(2);
-            rtp.set_timestamp(ts_recover);
-            rtp.set_sequence(seq);
-            // TODO: report the recovery to the 'Receiver' instance
-            if RtpReader::new(payload).unwrap().sequence_number() != seq {
-                println!(
-                    "{:?} Just recovered {:?}, but was aiming for {:?}! (recovered ts is {})",
-                    fec_header.orientation(),
-                    RtpReader::new(payload).unwrap().sequence_number(),
-                    seq,
-                    RtpReader::new(payload).unwrap().timestamp(),
-                );
-            }
-            recovered.truncate(len_recover as usize);
-            Some(recovered)
+        };
+        let missing_seq = self.find_single_missing_associated(&fec_header);
+        if let Some(seq) = missing_seq {
+            self.perform_correction(&fec_header, fec_payload, seq)
         } else {
             None
         }
+    }
+
+    fn perform_correction(&self, fec_header: &FecHeader<'_>, fec_payload: &[u8], seq: Seq) -> Option<<BP as BufferPool>::P> {
+        let recovered = self.buffer_pool.allocate();
+        if recovered.is_none() {
+            eprintln!("failed to allocate buffer from pool");
+            return None;
+        }
+        let mut recovered = recovered.unwrap();
+        recovered.truncate(fec_payload.len() + 12);
+        let payload = recovered.payload_mut();
+        // the 'payload' of the FEC packet protects the payload of the media packets, but
+        // not the headers, also prompeg disallows CSRC
+        payload[12..].copy_from_slice(fec_payload);
+        let mut len_recover = fec_header.length_recovery();
+        let mut ts_recover = fec_header.ts_recovery() + 12;
+        for (_, pk) in self.iter_associated(&fec_header) {
+            if let Some(pk) = pk {
+                Self::xor(payload, pk.payload());
+                len_recover ^= pk.payload().len() as u16;
+                let rtp = RtpReader::new(pk.payload()).unwrap();
+                ts_recover ^= rtp.timestamp();
+            }
+        }
+        if len_recover as usize <= RtpReader::MIN_HEADER_LEN {
+            println!("recovered packet len too small {} after attempt to recover {:?}", len_recover, seq);
+            return None;
+        }
+        let mut rtp = RtpHeaderMut::new(payload);
+        // Pretend that the RTP version is '2' in the recovered packet, since we can't recover
+        // that field per se, and downstream code should be allowed to check the version within
+        // packets without needing to know if they were subject to recovery,
+        rtp.set_version(2);
+        rtp.set_timestamp(ts_recover);
+        rtp.set_sequence(seq);
+        // TODO: report the recovery to the 'Receiver' instance
+        if RtpReader::new(payload).unwrap().sequence_number() != seq {
+            println!(
+                "{:?} Just recovered {:?}, but was aiming for {:?}! (recovered ts is {})",
+                fec_header.orientation(),
+                RtpReader::new(payload).unwrap().sequence_number(),
+                seq,
+                RtpReader::new(payload).unwrap().timestamp(),
+            );
+        }
+        recovered.truncate(len_recover as usize);
+        Some(recovered)
     }
 
     /// Performs exclusive-or of every byte in `src` with the corresponding byte in `dst`, placing
@@ -460,6 +523,8 @@ pub enum FecDecodeError {
         actual: fec::Orientation,
         expected: fec::Orientation,
     },
+    /// Ran out of space trying to queue a recovered packet for further recovery processing
+    NoSpaceForRecovered,
 }
 impl From<rtp_rs::RtpHeaderError> for FecDecodeError {
     fn from(v: rtp_rs::RtpHeaderError) -> Self {
@@ -501,39 +566,57 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> State<BP, Recv> {
         &mut self,
         seq: rtp_rs::Seq,
         pk: BP::P,
-    ) -> Result<Option<BP::P>, FecDecodeError> {
+        recovered: &mut arrayvec::ArrayVec<[BP::P; 10]>,
+    ) -> Result<(), FecDecodeError> {
         // if not Running, there's nothing to do; calling code should forward packet on to receiver
         if let State::Running { ref mut matrix, .. } = self {
-            Ok(matrix.insert(seq, pk)?)
-        } else {
-            Ok(None)
+            match matrix.insert(seq, pk)? {
+                Corrections::None => (),
+                Corrections::One(a) => {
+                    recovered.try_push(a)
+                        .map_err(|_e| FecDecodeError::NoSpaceForRecovered )?;
+                },
+                Corrections::Two(a, b) => {
+                    recovered.try_push(a)
+                        .map_err(|_e| FecDecodeError::NoSpaceForRecovered )?;
+                    recovered.try_push(b)
+                        .map_err(|_e| FecDecodeError::NoSpaceForRecovered )?;
+                },
+            }
         }
+        Ok(())
     }
 
     fn insert_column_packet(
         &mut self,
         seq: rtp_rs::Seq,
         pk: BP::P,
-    ) -> Result<Option<BP::P>, FecDecodeError> {
+        recovered: &mut arrayvec::ArrayVec<[BP::P; 10]>,
+    ) -> Result<(), FecDecodeError> {
         // if not Running, there's nothing to do
         if let State::Running { ref mut matrix, .. } = self {
-            Ok(matrix.insert_column(seq, pk)?)
-        } else {
-            Ok(None)
+            if let Some(pk) = matrix.insert_column(seq, pk)? {
+                recovered.try_push(pk)
+                    .map_err(|_e| FecDecodeError::NoSpaceForRecovered )?
+            }
         }
+        Ok(())
     }
 
     fn insert_row_packet(
         &mut self,
         seq: rtp_rs::Seq,
         pk: BP::P,
-    ) -> Result<Option<BP::P>, FecDecodeError> {
+        recovered: &mut arrayvec::ArrayVec<[BP::P; 10]>,
+    ) -> Result<(), FecDecodeError> {
         // if not Running, there's nothing to do
         if let State::Running { ref mut matrix, .. } = self {
-            Ok(matrix.insert_row(seq, pk)?)
-        } else {
-            Ok(None)
+            if let Some(pk) = matrix.insert_row(seq, pk)? {
+                recovered.try_push(pk)
+                    .map_err(|_e| FecDecodeError::NoSpaceForRecovered )?
+            }
         }
+        Ok(())
     }
 }
 
@@ -582,8 +665,14 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
             // TODO: check that:
             //       - CSRC is not used
             //       - extension usage is unchanging
+            let mut recovered = arrayvec::ArrayVec::<[_; 10]>::new();
             self.state
-                .insert_main_packet(rtp_header.sequence_number(), p)?;
+                .insert_main_packet(rtp_header.sequence_number(), p, &mut recovered)?;
+            while let Some(pk) = recovered.pop() {
+                let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
+                let seq = rtp_header.sequence_number();
+                self.state.insert_main_packet(seq, pk, &mut recovered)?;
+            }
         }
         Ok(())
     }
@@ -594,7 +683,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
     ) -> Result<(), FecDecodeError> {
         for p in packets {
             let rtp_header = rtp_rs::RtpReader::new(p.payload())?;
-            let fec_header = fec::FecHeader::from_bytes(rtp_header.payload())?;
+            let fec_header = fec::FecHeader::from_bytes(rtp_header.payload()).unwrap();
             if fec_header.orientation() != fec::Orientation::Row {
                 return Err(FecDecodeError::Orientation {
                     expected: fec::Orientation::Row,
@@ -602,13 +691,16 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
                 });
             }
             self.merge_fec_parameters(fec_header);
-            let mut recovered = self
-                .state
-                .insert_row_packet(rtp_header.sequence_number(), p)?;
-            while let Some(pk) = recovered {
+            // placing an arbitrary upper-limit on the backlog of recovered packets that can
+            // be created due to insertion of one media packet causing two additional media packets
+            // to be recovered.  TODO: needs more thought to understand true upper-limit
+            let mut recovered = arrayvec::ArrayVec::<[_; 10]>::new();
+            self.state
+                .insert_row_packet(rtp_header.sequence_number(), p, &mut recovered)?;
+            while let Some(pk) = recovered.pop() {
                 let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
                 let seq = rtp_header.sequence_number();
-                recovered = self.state.insert_main_packet(seq, pk)?;
+                self.state.insert_main_packet(seq, pk, &mut recovered)?;
             }
         }
         Ok(())
@@ -620,7 +712,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
     ) -> Result<(), FecDecodeError> {
         for p in pk {
             let rtp_header = rtp_rs::RtpReader::new(p.payload())?;
-            let fec_header = fec::FecHeader::from_bytes(rtp_header.payload())?;
+            let fec_header = fec::FecHeader::from_bytes(rtp_header.payload()).unwrap();
             if fec_header.orientation() != fec::Orientation::Column {
                 return Err(FecDecodeError::Orientation {
                     expected: fec::Orientation::Column,
@@ -628,8 +720,17 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
                 });
             }
             self.merge_fec_parameters(fec_header);
+            // placing an arbitrary upper-limit on the backlog of recovered packets that can
+            // be created due to insertion of one media packet causing two additional media packets
+            // to be recovered.  TODO: needs more thought to understand true upper-limit
+            let mut recovered = arrayvec::ArrayVec::<[_; 10]>::new();
             self.state
-                .insert_column_packet(rtp_header.sequence_number(), p)?;
+                .insert_column_packet(rtp_header.sequence_number(), p, &mut recovered)?;
+            while let Some(pk) = recovered.pop() {
+                let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
+                let seq = rtp_header.sequence_number();
+                self.state.insert_main_packet(seq, pk, &mut recovered)?;
+            }
         }
         Ok(())
     }
