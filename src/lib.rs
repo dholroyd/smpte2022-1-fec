@@ -17,7 +17,7 @@ use std::collections::VecDeque;
 use std::marker;
 
 pub trait Receiver<P: Packet> {
-    fn receive(&mut self, packets: impl Iterator<Item = P>);
+    fn receive(&mut self, packets: impl Iterator<Item = (P, PacketStatus)>);
 }
 
 #[derive(Debug)]
@@ -108,7 +108,13 @@ struct NilReceiver<P: Packet> {
     phantom: marker::PhantomData<P>,
 }
 impl<P: Packet> Receiver<P> for NilReceiver<P> {
-    fn receive(&mut self, _packets: impl Iterator<Item = P>) {}
+    fn receive(&mut self, _packets: impl Iterator<Item = (P, PacketStatus)>) {}
+}
+
+#[derive(Debug, PartialEq)]
+pub enum PacketStatus {
+    Received,
+    Recovered,
 }
 
 struct SeqEntry<P: Packet> {
@@ -116,7 +122,7 @@ struct SeqEntry<P: Packet> {
     //       value here from that.  For now keep it explicit to enable more assertions while I'm
     //       still working out the implementation.
     seq: rtp_rs::Seq,
-    pk: Option<P>,
+    pk: Option<(P, PacketStatus)>,
 }
 struct PacketSequence<P: Packet, Recv: Receiver<P>> {
     size_limit: usize,
@@ -146,7 +152,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
         }
     }
 
-    pub fn insert(&mut self, seq: rtp_rs::Seq, pk: P) {
+    pub fn insert(&mut self, seq: rtp_rs::Seq, pk: P, pk_status: PacketStatus) {
         if let Some(base_seq) = self.front_seq() {
             self.remove_outdated(seq, base_seq);
         }
@@ -160,9 +166,9 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             }
             if last_seq < seq {
                 self.seq_gone_backwards_count = 0;
-                self.packets.push_back(SeqEntry { seq, pk: Some(pk) });
+                self.packets.push_back(SeqEntry { seq, pk: Some((pk, pk_status)) });
             } else if let Some(p) = self.get_mut_by_seq(seq) {
-                p.pk = Some(pk);
+                p.pk = Some((pk, pk_status));
                 self.seq_gone_backwards_count = 0;
             } else {
                 // Packets with a sequence number that is 'too early' will be dropped, however
@@ -183,7 +189,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
                 }
             }
         } else {
-            self.packets.push_back(SeqEntry { seq, pk: Some(pk) });
+            self.packets.push_back(SeqEntry { seq, pk: Some((pk, pk_status)) });
         }
         #[cfg(debug_assertions)]
         self.check();
@@ -225,7 +231,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
         }
     }
 
-    fn get_by_seq(&self, seq: Seq) -> Option<&P> {
+    fn get_by_seq(&self, seq: Seq) -> Option<&(P, PacketStatus)> {
         if let Some(index) = self.index_of(seq) {
             self.packets[index].pk.as_ref()
         } else {
@@ -320,8 +326,9 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         &mut self,
         seq: rtp_rs::Seq,
         pk: BP::P,
+        pk_status: PacketStatus
     ) -> Result<Corrections<BP::P>, FecDecodeError> {
-        self.main_descriptors.insert(seq, pk);
+        self.main_descriptors.insert(seq, pk, pk_status);
 
         // if we already have FEC packets covering this media packet (because things arrived out
         // of sequence) then the arrival of this packet may now make it possible to apply a
@@ -329,7 +336,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         // belongs,
         if let Some(fec_seq) = Self::find_associated_fec_packet(&self.col_descriptors, seq) {
             if let Some(pk) = self.maybe_correct(Orientation::Column, fec_seq) {
-                self.main_descriptors.insert(seq, pk);
+                self.main_descriptors.insert(seq, pk, PacketStatus::Recovered);
             }
         }
         Ok(
@@ -353,7 +360,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
             .packets
             .iter()
             .filter_map(|e| e.pk.as_ref().map(|r| (e.seq, r))) // entries with non-None packets
-            .filter_map(|(seq, pk)| {
+            .filter_map(|(seq, (pk, _))| {
                 rtp_rs::RtpReader::new(pk.payload())
                     .ok()
                     .map(|rtp| (seq, rtp))
@@ -385,7 +392,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         seq: rtp_rs::Seq,
         pk: BP::P,
     ) -> Result<Option<BP::P>, FecDecodeError> {
-        self.col_descriptors.insert(seq, pk);
+        self.col_descriptors.insert(seq, pk, PacketStatus::Received);
         let res = self.maybe_correct(Orientation::Column, seq);
         Ok(res)
     }
@@ -395,7 +402,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         seq: rtp_rs::Seq,
         pk: BP::P,
     ) -> Result<Option<BP::P>, FecDecodeError> {
-        self.row_descriptors.insert(seq, pk);
+        self.row_descriptors.insert(seq, pk, PacketStatus::Received);
         let res = self.maybe_correct(Orientation::Row, seq);
         Ok(res)
     }
@@ -412,7 +419,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         (sn_start..sn_end)
             .seq_iter()
             .step_by(fec_header.offset() as usize)
-            .map(move |seq| (seq, self.main_descriptors.get_by_seq(seq)))
+            .map(move |seq| (seq, self.main_descriptors.get_by_seq(seq).map(|(pk,_)| pk)))
     }
 
     fn find_single_missing_associated(&self, fec_header: &FecHeader<'_>) -> Option<Seq> {
@@ -441,7 +448,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
 
     #[must_use ]
     fn maybe_correct(&mut self, orientation: Orientation, seq: Seq) -> Option<BP::P> {
-        let udp_pk = match orientation {
+        let (udp_pk, _) = match orientation {
             Orientation::Row => self.row_descriptors.get_by_seq(seq),
             Orientation::Column => self.col_descriptors.get_by_seq(seq),
         }?;
@@ -609,10 +616,11 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> State<BP, Recv> {
         seq: rtp_rs::Seq,
         pk: BP::P,
         recovered: &mut arrayvec::ArrayVec<[BP::P; 10]>,
+        pk_status: PacketStatus,
     ) -> Result<(), FecDecodeError> {
         // if not Running, there's nothing to do; calling code should forward packet on to receiver
         if let State::Running { ref mut matrix, .. } = self {
-            match matrix.insert(seq, pk)? {
+            match matrix.insert(seq, pk, pk_status)? {
                 Corrections::None => (),
                 Corrections::One(a) => {
                     recovered
@@ -714,11 +722,11 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
             //       - extension usage is unchanging
             let mut recovered = arrayvec::ArrayVec::<[_; 10]>::new();
             self.state
-                .insert_main_packet(rtp_header.sequence_number(), p, &mut recovered)?;
+                .insert_main_packet(rtp_header.sequence_number(), p, &mut recovered, PacketStatus::Received)?;
             while let Some(pk) = recovered.pop() {
                 let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
                 let seq = rtp_header.sequence_number();
-                self.state.insert_main_packet(seq, pk, &mut recovered)?;
+                self.state.insert_main_packet(seq, pk, &mut recovered, PacketStatus::Recovered)?;
             }
         }
         Ok(())
@@ -747,7 +755,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
             while let Some(pk) = recovered.pop() {
                 let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
                 let seq = rtp_header.sequence_number();
-                self.state.insert_main_packet(seq, pk, &mut recovered)?;
+                self.state.insert_main_packet(seq, pk, &mut recovered, PacketStatus::Recovered)?;
             }
         }
         Ok(())
@@ -776,7 +784,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
             while let Some(pk) = recovered.pop() {
                 let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
                 let seq = rtp_header.sequence_number();
-                self.state.insert_main_packet(seq, pk, &mut recovered)?;
+                self.state.insert_main_packet(seq, pk, &mut recovered, PacketStatus::Recovered)?;
             }
         }
         Ok(())
@@ -822,7 +830,7 @@ mod tests {
 
     struct TestReceiver;
     impl Receiver<HeapPacket> for TestReceiver {
-        fn receive(&mut self, _packets: impl Iterator<Item = HeapPacket>) {
+        fn receive(&mut self, _packets: impl Iterator<Item = (HeapPacket, PacketStatus)>) {
             unimplemented!()
         }
     }
