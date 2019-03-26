@@ -159,10 +159,10 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
     }
 
     pub fn insert(&mut self, seq: rtp_rs::Seq, pk: P, pk_status: PacketStatus) {
-        if let Some(base_seq) = self.front_seq() {
-            self.remove_outdated(seq, base_seq);
+        if let Some((base_seq, last_seq)) = self.seq_range() {
+            self.remove_outdated(seq, base_seq, last_seq);
         }
-        if let Some(last_seq) = self.back_seq() {
+        if let Some((base_seq, last_seq)) = self.seq_range() {
             // fill any gaps in the sequence with placeholders,
             let expected = last_seq.next();
             if expected < seq {
@@ -191,7 +191,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
                 self.seq_gone_backwards_count += 1;
                 if self.seq_gone_backwards_count >= Self::SEQ_GONE_BACKWARDS_LIMIT {
                     warn!("earliest buffered packet has {:?}, but received {} with an earlier sequence number (most recently {:?}), resetting buffer",
-                              self.front_seq(),
+                              base_seq,
                               self.seq_gone_backwards_count,
                               seq);
                     self.reset();
@@ -224,16 +224,16 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
         }
     }
 
-    fn front_seq(&self) -> Option<Seq> {
-        self.packets.front().map(|p| p.seq)
-    }
-
-    fn back_seq(&self) -> Option<Seq> {
-        self.packets.back().map(|p| p.seq)
+    fn seq_range(&self) -> Option<(Seq, Seq)> {
+        if let (Some(front), Some(back)) =  (self.packets.front(), self.packets.back()) {
+            Some((front.seq, back.seq))
+        } else {
+            None
+        }
     }
 
     fn index_of(&self, seq: Seq) -> Option<usize> {
-        let base = self.front_seq()?;
+        let (base, _) = self.seq_range()?;
         let diff = seq - base;
         if diff >= 0 && (diff as usize) < self.packets.len() {
             assert_eq!(self.packets[diff as usize].seq, seq);
@@ -265,7 +265,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             .receive(self.packets.drain(..).filter_map(|e| e.pk));
     }
 
-    fn remove_outdated(&mut self, seq_new: Seq, seq_base: Seq) {
+    fn remove_outdated(&mut self, seq_new: Seq, seq_base: Seq, last_seq: Seq) {
         let seq_delta = seq_new - seq_base;
         if seq_delta > 0 && seq_delta as usize >= self.size_limit {
             // last index inclusive to be removed (so '0' means just remove the first item)
@@ -276,7 +276,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
                     seq_delta,
                     seq_new,
                     seq_base,
-                    self.back_seq().unwrap()
+                    last_seq
                 );
                 self.packets.drain(..)
             } else {
@@ -440,7 +440,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
     }
 
     fn find_single_missing_associated(&self, fec_header: &FecHeader<'_>) -> Option<Seq> {
-        let front_seq = self.main_descriptors.front_seq()?;
+        let (front_seq, _) = self.main_descriptors.seq_range()?;
         let mut missing_seq = None;
         for (seq, pk) in self.iter_associated(&fec_header) {
             if seq < front_seq {
