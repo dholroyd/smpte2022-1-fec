@@ -166,7 +166,10 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             }
             if last_seq < seq {
                 self.seq_gone_backwards_count = 0;
-                self.packets.push_back(SeqEntry { seq, pk: Some((pk, pk_status)) });
+                self.packets.push_back(SeqEntry {
+                    seq,
+                    pk: Some((pk, pk_status)),
+                });
             } else if let Some(p) = self.get_mut_by_seq(seq) {
                 p.pk = Some((pk, pk_status));
                 self.seq_gone_backwards_count = 0;
@@ -189,7 +192,10 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
                 }
             }
         } else {
-            self.packets.push_back(SeqEntry { seq, pk: Some((pk, pk_status)) });
+            self.packets.push_back(SeqEntry {
+                seq,
+                pk: Some((pk, pk_status)),
+            });
         }
         #[cfg(debug_assertions)]
         self.check();
@@ -326,7 +332,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         &mut self,
         seq: rtp_rs::Seq,
         pk: BP::P,
-        pk_status: PacketStatus
+        pk_status: PacketStatus,
     ) -> Result<Corrections<BP::P>, FecDecodeError> {
         self.main_descriptors.insert(seq, pk, pk_status);
 
@@ -336,7 +342,8 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         // belongs,
         if let Some(fec_seq) = Self::find_associated_fec_packet(&self.col_descriptors, seq) {
             if let Some(pk) = self.maybe_correct(Orientation::Column, fec_seq) {
-                self.main_descriptors.insert(seq, pk, PacketStatus::Recovered);
+                self.main_descriptors
+                    .insert(seq, pk, PacketStatus::Recovered);
             }
         }
         Ok(
@@ -419,7 +426,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         (sn_start..sn_end)
             .seq_iter()
             .step_by(fec_header.offset() as usize)
-            .map(move |seq| (seq, self.main_descriptors.get_by_seq(seq).map(|(pk,_)| pk)))
+            .map(move |seq| (seq, self.main_descriptors.get_by_seq(seq).map(|(pk, _)| pk)))
     }
 
     fn find_single_missing_associated(&self, fec_header: &FecHeader<'_>) -> Option<Seq> {
@@ -446,7 +453,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         missing_seq
     }
 
-    #[must_use ]
+    #[must_use]
     fn maybe_correct(&mut self, orientation: Orientation, seq: Seq) -> Option<BP::P> {
         let (udp_pk, _) = match orientation {
             Orientation::Row => self.row_descriptors.get_by_seq(seq),
@@ -721,12 +728,17 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
             //       - CSRC is not used
             //       - extension usage is unchanging
             let mut recovered = arrayvec::ArrayVec::<[_; 10]>::new();
-            self.state
-                .insert_main_packet(rtp_header.sequence_number(), p, &mut recovered, PacketStatus::Received)?;
+            self.state.insert_main_packet(
+                rtp_header.sequence_number(),
+                p,
+                &mut recovered,
+                PacketStatus::Received,
+            )?;
             while let Some(pk) = recovered.pop() {
                 let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
                 let seq = rtp_header.sequence_number();
-                self.state.insert_main_packet(seq, pk, &mut recovered, PacketStatus::Recovered)?;
+                self.state
+                    .insert_main_packet(seq, pk, &mut recovered, PacketStatus::Recovered)?;
             }
         }
         Ok(())
@@ -755,7 +767,8 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
             while let Some(pk) = recovered.pop() {
                 let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
                 let seq = rtp_header.sequence_number();
-                self.state.insert_main_packet(seq, pk, &mut recovered, PacketStatus::Recovered)?;
+                self.state
+                    .insert_main_packet(seq, pk, &mut recovered, PacketStatus::Recovered)?;
             }
         }
         Ok(())
@@ -784,7 +797,8 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
             while let Some(pk) = recovered.pop() {
                 let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
                 let seq = rtp_header.sequence_number();
-                self.state.insert_main_packet(seq, pk, &mut recovered, PacketStatus::Recovered)?;
+                self.state
+                    .insert_main_packet(seq, pk, &mut recovered, PacketStatus::Recovered)?;
             }
         }
         Ok(())

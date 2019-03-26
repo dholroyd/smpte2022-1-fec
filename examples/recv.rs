@@ -23,7 +23,10 @@ struct Stats {
 }
 impl Stats {
     fn dump(&self) {
-        println!("RTP: received={} uncorrectable={} corrected={}", self.packets, self.losses, self.recovered);
+        println!(
+            "RTP: received={} uncorrectable={} corrected={}",
+            self.packets, self.losses, self.recovered
+        );
     }
 }
 
@@ -50,7 +53,12 @@ impl Receiver<HeapPacket> for MyReceiver {
                                 // actually we only lost a single packet (the one with seq=4),
                                 // hence we subtract 1 here,
                                 stats.losses += diff as u64 - 1;
-                                println!("Lost {} packets between {:?} and {:?}", diff - 1, last, this_seq);
+                                println!(
+                                    "Lost {} packets between {:?} and {:?}",
+                                    diff - 1,
+                                    last,
+                                    this_seq
+                                );
                             } else {
                                 // If 'diff' becomes negative, that indicates  a very large gap
                                 // in sequence numbers could well mean that the sender has reset
@@ -59,7 +67,10 @@ impl Receiver<HeapPacket> for MyReceiver {
                                 // without knowledge of the packet-rate we can't estimate this).
                                 // Therefore we just don't update the packet loss counter in this
                                 // case.
-                                println!("Sequence number change of {} from {:?} to {:?}", diff, last, this_seq);
+                                println!(
+                                    "Sequence number change of {} from {:?} to {:?}",
+                                    diff, last, this_seq
+                                );
                             }
                         }
                     }
@@ -88,7 +99,7 @@ fn main() -> Result<(), std::io::Error> {
     let stats = rc::Rc::new(cell::RefCell::new(Stats {
         packets: 0,
         losses: 0,
-        recovered: 0
+        recovered: 0,
     }));
     let base_port = 5000;
     let main_sock = create_source(base_port)?;
