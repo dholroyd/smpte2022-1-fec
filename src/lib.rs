@@ -30,6 +30,7 @@ enum FecGeometryError {
     BadMatrixSize(u16),
 }
 
+#[derive(Debug)]
 struct FecGeometry {
     /// Number of columns
     l: u8,
@@ -150,6 +151,10 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             recv,
             seq_gone_backwards_count: 0,
         }
+    }
+
+    pub fn dispose(self) -> Recv {
+        self.recv
     }
 
     pub fn insert(&mut self, seq: rtp_rs::Seq, pk: P, pk_status: PacketStatus) {
@@ -323,6 +328,10 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
             row_descriptors: PacketSequence::new(rows as usize),
             col_descriptors: PacketSequence::new(cols as usize),
         }
+    }
+
+    pub fn dispose(self) -> (BP, Recv) {
+        (self.buffer_pool, self.main_descriptors.dispose())
     }
 
     // TODO: Explicitly report to calling code the SN values for packets definitely lost.
@@ -618,6 +627,21 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> State<BP, Recv> {
         }
     }
 
+    fn reconfigure(&mut self, geometry: FecGeometry) {
+        let width = geometry.d;
+        let height = geometry.l;
+        *self = match std::mem::replace(self, State::Init) {
+            State::Running{matrix, .. } => {
+                let (buffer_pool, receiver) = matrix.dispose();
+                State::Running {
+                    geometry,
+                    matrix: FecMatrix::new(buffer_pool, width, height, receiver),
+                }
+            },
+            _ => panic!("Only State::Start is supported by to_running()"),
+        }
+    }
+
     fn insert_main_packet(
         &mut self,
         seq: rtp_rs::Seq,
@@ -825,9 +849,8 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
             } => {
                 if !geometry.matches(&header) {
                     let geom = FecGeometry::from_header(&header).unwrap(); // FIXME
-                    *geometry = geom;
-                    eprintln!("Ooof; needed to reset FEC geom")
-                    // TODO: reset any other state
+                    eprintln!("needed to reset FEC geometry from {:?} to {:?}", geometry, geom);
+                    self.state.reconfigure(geom);
                 }
             }
         }
