@@ -328,7 +328,9 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         // correction, so search for those opportunities in the row + column to which the packet
         // belongs,
         if let Some(fec_seq) = Self::find_associated_fec_packet(&self.col_descriptors, seq) {
-            self.maybe_correct(Orientation::Column, fec_seq);
+            if let Some(pk) = self.maybe_correct(Orientation::Column, fec_seq) {
+                self.main_descriptors.insert(seq, pk);
+            }
         }
         Ok(
             match (
@@ -437,6 +439,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         missing_seq
     }
 
+    #[must_use ]
     fn maybe_correct(&mut self, orientation: Orientation, seq: Seq) -> Option<BP::P> {
         let udp_pk = match orientation {
             Orientation::Row => self.row_descriptors.get_by_seq(seq),
