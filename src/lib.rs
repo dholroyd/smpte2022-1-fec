@@ -503,13 +503,13 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
             return None;
         }
         let mut recovered = recovered.unwrap();
-        recovered.truncate(fec_payload.len() + 12);
+        recovered.truncate(fec_payload.len() + RtpReader::MIN_HEADER_LEN);
         let payload = recovered.payload_mut();
         // the 'payload' of the FEC packet protects the payload of the media packets, but
         // not the headers, also prompeg disallows CSRC
-        payload[12..].copy_from_slice(fec_payload);
+        payload[RtpReader::MIN_HEADER_LEN..].copy_from_slice(fec_payload);
         let mut len_recover = fec_header.length_recovery();
-        let mut ts_recover = fec_header.ts_recovery() + 12;
+        let mut ts_recover = fec_header.ts_recovery() + RtpReader::MIN_HEADER_LEN as u32;
         for (_, pk) in self.iter_associated(&fec_header) {
             if let Some(pk) = pk {
                 Self::xor(payload, pk.payload());
