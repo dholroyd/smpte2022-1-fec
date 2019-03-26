@@ -175,7 +175,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
                 // new sequence.
                 self.seq_gone_backwards_count += 1;
                 if self.seq_gone_backwards_count >= Self::SEQ_GONE_BACKWARDS_LIMIT {
-                    eprintln!("eariest buffered packet has {:?}, but recieved {} with an earlier sequence number (most recently {:?}), resetting buffer",
+                    eprintln!("earliest buffered packet has {:?}, but received {} with an earlier sequence number (most recently {:?}), resetting buffer",
                               self.front_seq(),
                               self.seq_gone_backwards_count,
                               seq);
