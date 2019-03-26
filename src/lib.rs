@@ -161,10 +161,9 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             if last_seq < seq {
                 self.seq_gone_backwards_count = 0;
                 self.packets.push_back(SeqEntry { seq, pk: Some(pk) });
-            } else if let Some(p) = self.packets.iter_mut().find(|p| p.seq == seq) {
-                // TODO: can be O(1) rather than O(n)
-                self.seq_gone_backwards_count = 0;
+            } else if let Some(p) = self.get_mut_by_seq(seq) {
                 p.pk = Some(pk);
+                self.seq_gone_backwards_count = 0;
             } else {
                 // Packets with a sequence number that is 'too early' will be dropped, however
                 // that alone could mean that if the sequence numbers are reset by the sender
@@ -215,15 +214,31 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
         self.packets.back().map(|p| p.seq)
     }
 
+    fn index_of(&self, seq: Seq) -> Option<usize> {
+        let base = self.front_seq()?;
+        let diff = seq - base;
+        if diff >= 0 && (diff as usize) < self.packets.len() {
+            assert_eq!(self.packets[diff as usize].seq, seq);
+            Some(diff as usize)
+        } else {
+            None
+        }
+    }
+
     fn get_by_seq(&self, seq: Seq) -> Option<&P> {
-        self.front_seq().and_then(|base| {
-            let diff = seq - base;
-            if diff >= 0 && (diff as usize) < self.packets.len() {
-                self.packets[diff as usize].pk.as_ref()
-            } else {
-                None
-            }
-        })
+        if let Some(index) = self.index_of(seq) {
+            self.packets[index].pk.as_ref()
+        } else {
+            None
+        }
+    }
+
+    fn get_mut_by_seq(&mut self, seq: Seq) -> Option<&mut SeqEntry<P>> {
+        if let Some(index) = self.index_of(seq) {
+            Some(&mut self.packets[index])
+        } else {
+            None
+        }
     }
 
     fn reset(&mut self) {
