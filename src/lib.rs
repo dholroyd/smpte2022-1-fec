@@ -15,6 +15,7 @@ use smpte2022_1_packet::FecHeader;
 use smpte2022_1_packet::Orientation;
 use std::collections::VecDeque;
 use std::marker;
+use log::*;
 
 pub trait Receiver<P: Packet> {
     fn receive(&mut self, packets: impl Iterator<Item = (P, PacketStatus)>);
@@ -189,7 +190,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
                 // new sequence.
                 self.seq_gone_backwards_count += 1;
                 if self.seq_gone_backwards_count >= Self::SEQ_GONE_BACKWARDS_LIMIT {
-                    eprintln!("earliest buffered packet has {:?}, but received {} with an earlier sequence number (most recently {:?}), resetting buffer",
+                    warn!("earliest buffered packet has {:?}, but received {} with an earlier sequence number (most recently {:?}), resetting buffer",
                               self.front_seq(),
                               self.seq_gone_backwards_count,
                               seq);
@@ -270,7 +271,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             // last index inclusive to be removed (so '0' means just remove the first item)
             let to_remove = seq_delta as usize - self.size_limit;
             let drain = if to_remove >= self.packets.len() {
-                println!(
+                warn!(
                     "Large jump {} receiving {:?}, while extent is {:?}-{:?}",
                     seq_delta,
                     seq_new,
@@ -471,14 +472,14 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         let rtp_pk = match rtp_rs::RtpReader::new(udp_pk.payload()) {
             Ok(res) => res,
             Err(e) => {
-                eprintln!("{:?}: {:?}", orientation, e);
+                warn!("{:?}: {:?}", orientation, e);
                 return None;
             }
         };
         let (fec_header, fec_payload) = match FecHeader::split_from_bytes(rtp_pk.payload()) {
             Ok(res) => res,
             Err(e) => {
-                eprintln!("{:?}: {:?}", orientation, e);
+                warn!("{:?}: {:?}", orientation, e);
                 return None;
             }
         };
@@ -498,7 +499,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
     ) -> Option<<BP as BufferPool>::P> {
         let recovered = self.buffer_pool.allocate();
         if recovered.is_none() {
-            eprintln!("failed to allocate buffer from pool");
+            error!("failed to allocate buffer from pool");
             return None;
         }
         let mut recovered = recovered.unwrap();
@@ -518,7 +519,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
             }
         }
         if len_recover as usize <= RtpReader::MIN_HEADER_LEN {
-            println!(
+            warn!(
                 "recovered packet len too small {} after attempt to recover {:?}",
                 len_recover, seq
             );
@@ -533,7 +534,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         rtp.set_sequence(seq);
         // TODO: report the recovery to the 'Receiver' instance
         if RtpReader::new(payload).unwrap().sequence_number() != seq {
-            println!(
+            warn!(
                 "{:?} Just recovered {:?}, but was aiming for {:?}! (recovered ts is {})",
                 fec_header.orientation(),
                 RtpReader::new(payload).unwrap().sequence_number(),
@@ -849,7 +850,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
             } => {
                 if !geometry.matches(&header) {
                     let geom = FecGeometry::from_header(&header).unwrap(); // FIXME
-                    eprintln!("needed to reset FEC geometry from {:?} to {:?}", geometry, geom);
+                    warn!("needed to reset FEC geometry from {:?} to {:?}", geometry, geom);
                     self.state.reconfigure(geom);
                 }
             }

@@ -96,6 +96,8 @@ fn create_source(port: u16) -> Result<mio::net::UdpSocket, io::Error> {
 }
 
 fn main() -> Result<(), std::io::Error> {
+    env_logger::init();
+
     let stats = rc::Rc::new(cell::RefCell::new(Stats {
         packets: 0,
         losses: 0,
