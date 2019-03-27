@@ -187,7 +187,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             } else {
                 // Packets with a sequence number that is 'too early' will be dropped, however
                 // that alone could mean that if the sequence numbers are reset by the sender
-                // (e.g. the sender is restarted), then we would drop all packets sent util
+                // (e.g. the sender is restarted), then we would drop all packets sent until
                 // we get to this point in the sequence again.  Therefore, after
                 // SEQ_GONE_BACKWARDS_LIMIT packets have been received with with a 'too early'
                 // sequence number, we assume that the sender was restarted and reset all our
