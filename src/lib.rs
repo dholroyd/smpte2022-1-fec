@@ -17,6 +17,10 @@ use std::collections::VecDeque;
 use std::marker;
 use log::*;
 
+fn assert_seq<P: Packet>(expected: Seq, pk: &P) {
+    assert_eq!(expected, RtpReader::new(pk.payload()).unwrap().sequence_number());
+}
+
 pub trait Receiver<P: Packet> {
     fn receive(&mut self, packets: impl Iterator<Item = (P, PacketStatus)>);
 }
@@ -159,6 +163,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
     }
 
     pub fn insert(&mut self, seq: rtp_rs::Seq, pk: P, pk_status: PacketStatus) {
+        assert_seq(seq, &pk);
         if let Some((base_seq, last_seq)) = self.seq_range() {
             self.remove_outdated(seq, base_seq, last_seq);
         }
@@ -219,6 +224,9 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
         for (i, p) in self.packets.iter().enumerate() {
             if let Some(seq) = last {
                 assert_eq!(p.seq, seq.next(), "at index {}", i);
+            }
+            if let Some((ref pk, _)) = p.pk {
+                assert_seq(p.seq, pk);
             }
             last = Some(p.seq);
         }
@@ -352,8 +360,10 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         // belongs,
         if let Some(fec_seq) = Self::find_associated_fec_packet(&self.col_descriptors, seq) {
             if let Some(pk) = self.maybe_correct(Orientation::Column, fec_seq) {
+                let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
+                let recovered_seq = rtp_header.sequence_number();
                 self.main_descriptors
-                    .insert(seq, pk, PacketStatus::Recovered);
+                    .insert(recovered_seq, pk, PacketStatus::Recovered);
             }
         }
         Ok(
