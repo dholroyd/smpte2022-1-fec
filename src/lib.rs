@@ -451,7 +451,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
                 // packet that we never actually accept.
                 // TODO: maybe just allow inserting at the start of the matrix so that we don't
                 //       need this condition here
-                continue;
+                return None;
             }
             if pk.is_none() {
                 match missing_seq {
