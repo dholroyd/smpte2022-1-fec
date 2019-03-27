@@ -370,14 +370,6 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         // of sequence) then the arrival of this packet may now make it possible to apply a
         // correction, so search for those opportunities in the row + column to which the packet
         // belongs,
-        if let Some(fec_seq) = Self::find_associated_fec_packet(&self.col_descriptors, seq) {
-            if let Some(pk) = self.maybe_correct(Orientation::Column, fec_seq) {
-                let rtp_header = rtp_rs::RtpReader::new(pk.payload())?;
-                let recovered_seq = rtp_header.sequence_number();
-                self.main_descriptors
-                    .insert(recovered_seq, pk, PacketStatus::Recovered);
-            }
-        }
         Ok(
             match (
                 self.look_for_col_correction(seq),
