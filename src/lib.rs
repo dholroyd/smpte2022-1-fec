@@ -491,6 +491,12 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         }
     }
 
+    fn rtp_payload_len_for(pk: &<BP as BufferPool>::P) -> u16 {
+        // TODO: SMPTE-2022-1 requires that the RTP header length be fixed at 12 bytes; we
+        //       could assert this is actually the case,
+        (pk.payload().len() - RtpReader::MIN_HEADER_LEN) as u16
+    }
+
     fn perform_correction(
         &self,
         fec_header: &FecHeader<'_>,
@@ -513,18 +519,12 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         for (_, pk) in self.iter_associated(&fec_header) {
             if let Some(pk) = pk {
                 Self::xor(payload, pk.payload());
-                len_recover ^= pk.payload().len() as u16;
+                len_recover ^= Self::rtp_payload_len_for(pk);
                 let rtp = RtpReader::new(pk.payload()).unwrap();
                 ts_recover ^= rtp.timestamp();
             }
         }
-        if len_recover as usize <= RtpReader::MIN_HEADER_LEN {
-            warn!(
-                "recovered packet len too small {} after attempt to recover {:?}",
-                len_recover, seq
-            );
-            return None;
-        }
+        len_recover += RtpReader::MIN_HEADER_LEN as u16;
         let mut rtp = RtpHeaderMut::new(payload);
         // Pretend that the RTP version is '2' in the recovered packet, since we can't recover
         // that field per se, and downstream code should be allowed to check the version within
