@@ -352,6 +352,18 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         pk: BP::P,
         pk_status: PacketStatus,
     ) -> Result<Corrections<BP::P>, FecDecodeError> {
+        match self.main_descriptors.get_by_seq(seq) {
+            // TODO: keep stats for these rather than logging
+            Some((_, PacketStatus::Recovered)) => {
+                info!("Received packet already recovered by FEC: {:?}", seq);
+                return Ok(Corrections::None);
+            },
+            Some((_, PacketStatus::Received)) => {
+                info!("Received duplicate packet: {:?}", seq);
+                return Ok(Corrections::None);
+            },
+            _ => (),
+        }
         self.main_descriptors.insert(seq, pk, pk_status);
 
         // if we already have FEC packets covering this media packet (because things arrived out
