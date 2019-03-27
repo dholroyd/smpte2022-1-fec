@@ -532,15 +532,6 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         rtp.set_version(2);
         rtp.set_timestamp(ts_recover);
         rtp.set_sequence(seq);
-        if RtpReader::new(payload).unwrap().sequence_number() != seq {
-            warn!(
-                "{:?} Just recovered {:?}, but was aiming for {:?}! (recovered ts is {})",
-                fec_header.orientation(),
-                RtpReader::new(payload).unwrap().sequence_number(),
-                seq,
-                RtpReader::new(payload).unwrap().timestamp(),
-            );
-        }
         recovered.truncate(len_recover as usize);
         Some(recovered)
     }
