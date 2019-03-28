@@ -343,9 +343,6 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         (self.buffer_pool, self.main_descriptors.dispose())
     }
 
-    // TODO: Explicitly report to calling code the SN values for packets definitely lost.
-    //       Support calling code collecting stats about number of losses + corrections.
-
     pub fn insert(
         &mut self,
         seq: rtp_rs::Seq,
