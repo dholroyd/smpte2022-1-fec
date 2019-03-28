@@ -166,7 +166,7 @@ fn main() -> Result<(), std::io::Error> {
                     decoder
                         .add_main_packets(pk_buf.drain(..))
                         .expect("decoding main packet");
-                },
+                }
                 FEC_ONE => {
                     loop {
                         let mut pk = buffer_pool.allocate().expect("allocating column buffer");
@@ -188,7 +188,7 @@ fn main() -> Result<(), std::io::Error> {
                     decoder
                         .add_column_packets(pk_buf.drain(..))
                         .expect("decoding column packet");
-                },
+                }
                 FEC_TWO => {
                     loop {
                         let mut pk = buffer_pool.allocate().expect("allocating row buffer");
@@ -210,7 +210,7 @@ fn main() -> Result<(), std::io::Error> {
                     decoder
                         .add_row_packets(pk_buf.drain(..))
                         .expect("decoding row packet");
-                },
+                }
                 TIMER => {
                     let stats = timer.poll().unwrap();
                     stats.borrow().dump();

@@ -7,6 +7,7 @@
 
 pub mod heap_pool;
 
+use log::*;
 use rtp_rs::IntoSeqIterator;
 use rtp_rs::RtpReader;
 use rtp_rs::Seq;
@@ -15,10 +16,12 @@ use smpte2022_1_packet::FecHeader;
 use smpte2022_1_packet::Orientation;
 use std::collections::VecDeque;
 use std::marker;
-use log::*;
 
 fn assert_seq<P: Packet>(expected: Seq, pk: &P) {
-    assert_eq!(expected, RtpReader::new(pk.payload()).unwrap().sequence_number());
+    assert_eq!(
+        expected,
+        RtpReader::new(pk.payload()).unwrap().sequence_number()
+    );
 }
 
 pub trait Receiver<P: Packet> {
@@ -233,7 +236,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
     }
 
     fn seq_range(&self) -> Option<(Seq, Seq)> {
-        if let (Some(front), Some(back)) =  (self.packets.front(), self.packets.back()) {
+        if let (Some(front), Some(back)) = (self.packets.front(), self.packets.back()) {
             Some((front.seq, back.seq))
         } else {
             None
@@ -281,10 +284,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             let drain = if to_remove >= self.packets.len() {
                 warn!(
                     "Large jump {} receiving {:?}, while extent is {:?}-{:?}",
-                    seq_delta,
-                    seq_new,
-                    seq_base,
-                    last_seq
+                    seq_delta, seq_new, seq_base, last_seq
                 );
                 self.packets.drain(..)
             } else {
@@ -354,11 +354,11 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
             Some((_, PacketStatus::Recovered)) => {
                 info!("Received packet already recovered by FEC: {:?}", seq);
                 return Ok(Corrections::None);
-            },
+            }
             Some((_, PacketStatus::Received)) => {
                 info!("Received duplicate packet: {:?}", seq);
                 return Ok(Corrections::None);
-            },
+            }
             _ => (),
         }
         self.main_descriptors.insert(seq, pk, pk_status);
@@ -633,13 +633,13 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> State<BP, Recv> {
         let width = geometry.d;
         let height = geometry.l;
         *self = match std::mem::replace(self, State::Init) {
-            State::Running{matrix, .. } => {
+            State::Running { matrix, .. } => {
                 let (buffer_pool, receiver) = matrix.dispose();
                 State::Running {
                     geometry,
                     matrix: FecMatrix::new(buffer_pool, width, height, receiver),
                 }
-            },
+            }
             _ => panic!("Only State::Start is supported by to_running()"),
         }
     }
@@ -851,7 +851,10 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
             } => {
                 if !geometry.matches(&header) {
                     let geom = FecGeometry::from_header(&header).unwrap(); // FIXME
-                    warn!("needed to reset FEC geometry from {:?} to {:?}", geometry, geom);
+                    warn!(
+                        "needed to reset FEC geometry from {:?} to {:?}",
+                        geometry, geom
+                    );
                     self.state.reconfigure(geom);
                 }
             }
