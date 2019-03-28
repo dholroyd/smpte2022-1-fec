@@ -29,13 +29,16 @@ pub trait Receiver<P: Packet> {
 }
 
 #[derive(Debug)]
-enum FecGeometryError {
+pub enum FecGeometryError {
     /// We can't work out the FEC settings given a 'row' packet, we need the headers from a
     /// 'column' packet
     ColumnPacketRequired,
     BadNumberOfRows(u8),
     BadNumberOfColumns(u8),
     BadMatrixSize(u16),
+    /// The settings in the header of a received FEC row packet are not compatible with the settings
+    /// in FEC column packets that are being received
+    RowIncompatibleWithColumn,
 }
 
 #[derive(Debug)]
@@ -586,6 +589,7 @@ impl RtpHeaderMut<'_> {
 pub enum FecDecodeError {
     Rtp(rtp_rs::RtpHeaderError),
     Fec(fec::FecHeaderError),
+    Geom(FecGeometryError),
     Orientation {
         actual: fec::Orientation,
         expected: fec::Orientation,
@@ -601,6 +605,11 @@ impl From<rtp_rs::RtpHeaderError> for FecDecodeError {
 impl From<fec::FecHeaderError> for FecDecodeError {
     fn from(v: fec::FecHeaderError) -> Self {
         FecDecodeError::Fec(v)
+    }
+}
+impl From<FecGeometryError> for FecDecodeError {
+    fn from(v: FecGeometryError) -> Self {
+        FecDecodeError::Geom(v)
     }
 }
 
@@ -783,7 +792,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
                     actual: fec::Orientation::Column,
                 });
             }
-            self.merge_fec_parameters(fec_header);
+            self.merge_fec_parameters(fec_header)?;
             // placing an arbitrary upper-limit on the backlog of recovered packets that can
             // be created due to insertion of one media packet causing two additional media packets
             // to be recovered.  TODO: needs more thought to understand true upper-limit
@@ -813,7 +822,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
                     actual: fec::Orientation::Row,
                 });
             }
-            self.merge_fec_parameters(fec_header);
+            self.merge_fec_parameters(fec_header)?;
             // placing an arbitrary upper-limit on the backlog of recovered packets that can
             // be created due to insertion of one media packet causing two additional media packets
             // to be recovered.  TODO: needs more thought to understand true upper-limit
@@ -830,13 +839,9 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
         Ok(())
     }
 
-    fn merge_fec_parameters(&mut self, header: fec::FecHeader<'_>) {
+    fn merge_fec_parameters(&mut self, header: fec::FecHeader<'_>) -> Result<(), FecGeometryError> {
         // TODO: Grace period after FEC parameter change to avoid DOS attack due to having to
         //       reallocate buffers every time a packet arrives in worst case.
-
-        // TODO: Maybe just drop any row-packets that don't match the current state (so we rely on
-        //       packets of the first stream arriving to change the config).  This would avoid
-        //       the state flip-flopping all the time if the FEC streams have mismatched settings.
         match self.state {
             State::Init => panic!("self.state is State::Init"),
             State::Start(..) => {
@@ -850,15 +855,27 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
                 ref mut geometry, ..
             } => {
                 if !geometry.matches(&header) {
-                    let geom = FecGeometry::from_header(&header).unwrap(); // FIXME
-                    warn!(
-                        "needed to reset FEC geometry from {:?} to {:?}",
-                        geometry, geom
-                    );
-                    self.state.reconfigure(geom);
+                    match header.orientation() {
+                        Orientation::Column => {
+                            let geom = FecGeometry::from_header(&header)?;
+                            warn!(
+                                "needed to reset FEC geometry from {:?} to {:?}",
+                                geometry, geom
+                            );
+                            self.state.reconfigure(geom);
+                        },
+                        Orientation::Row => {
+                            warn!(
+                                "Row packet incompatible with current FEC settings {:?} {:?}",
+                                geometry, header
+                            );
+                            return Err(FecGeometryError::RowIncompatibleWithColumn)
+                        }
+                    }
                 }
             }
         }
+        Ok(())
     }
 }
 

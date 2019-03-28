@@ -7,6 +7,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::rc;
 use std::time;
+use log::*;
 
 const MAIN: mio::Token = mio::Token(0);
 const FEC_ONE: mio::Token = mio::Token(1);
@@ -160,12 +161,12 @@ fn main() -> Result<(), std::io::Error> {
                         if pk_buf.len() > MAX_PACKET_BATCH {
                             decoder
                                 .add_main_packets(pk_buf.drain(..))
-                                .expect("decoding main packet");
+                                .unwrap_or_else(|e| error!("Main packet: {:?}", e) )
                         }
                     }
                     decoder
                         .add_main_packets(pk_buf.drain(..))
-                        .expect("decoding main packet");
+                        .unwrap_or_else(|e| error!("Main packet: {:?}", e) )
                 }
                 FEC_ONE => {
                     loop {
@@ -182,12 +183,12 @@ fn main() -> Result<(), std::io::Error> {
                         if pk_buf.len() > MAX_PACKET_BATCH {
                             decoder
                                 .add_column_packets(pk_buf.drain(..))
-                                .expect("decoding column packet");
+                                .unwrap_or_else(|e| error!("Col packet: {:?}", e) )
                         }
                     }
                     decoder
                         .add_column_packets(pk_buf.drain(..))
-                        .expect("decoding column packet");
+                        .unwrap_or_else(|e| error!("Col packet: {:?}", e) )
                 }
                 FEC_TWO => {
                     loop {
@@ -204,12 +205,12 @@ fn main() -> Result<(), std::io::Error> {
                         if pk_buf.len() > MAX_PACKET_BATCH {
                             decoder
                                 .add_row_packets(pk_buf.drain(..))
-                                .expect("decoding row packet");
+                                .unwrap_or_else(|e| error!("Row packet: {:?}", e) )
                         }
                     }
                     decoder
                         .add_row_packets(pk_buf.drain(..))
-                        .expect("decoding row packet");
+                        .unwrap_or_else(|e| error!("Row packet: {:?}", e) )
                 }
                 TIMER => {
                     let stats = timer.poll().unwrap();
