@@ -171,7 +171,10 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
     pub fn insert(&mut self, seq: rtp_rs::Seq, pk: P, pk_status: PacketStatus) {
         assert_seq(seq, &pk);
         if let Some((base_seq, last_seq)) = self.seq_range() {
-            self.remove_outdated(seq, base_seq, last_seq);
+            let removed =
+                Self::remove_outdated(&mut self.packets, self.size_limit, seq, base_seq, last_seq);
+            // TODO: return the used packets to the caller so that PacketSequence doesn't even need Recv
+            self.recv.receive(removed);
         }
         if let Some((base_seq, last_seq)) = self.seq_range() {
             // fill any gaps in the sequence with placeholders,
@@ -279,23 +282,30 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             .receive(self.packets.drain(..).filter_map(|e| e.pk));
     }
 
-    fn remove_outdated(&mut self, seq_new: Seq, seq_base: Seq, last_seq: Seq) {
+    fn remove_outdated<'a>(
+        packets: &'a mut VecDeque<SeqEntry<P>>,
+        size_limit: usize,
+        seq_new: Seq,
+        seq_base: Seq,
+        last_seq: Seq,
+    ) -> impl Iterator<Item = (P, PacketStatus)> + 'a {
         let seq_delta = seq_new - seq_base;
-        if seq_delta > 0 && seq_delta as usize >= self.size_limit {
+        if seq_delta > 0 && seq_delta as usize >= size_limit {
             // last index inclusive to be removed (so '0' means just remove the first item)
-            let to_remove = seq_delta as usize - self.size_limit;
-            let drain = if to_remove >= self.packets.len() {
+            let to_remove = seq_delta as usize - size_limit;
+            if to_remove >= packets.len() {
                 warn!(
                     "Large jump {} receiving {:?}, while extent is {:?}-{:?}",
                     seq_delta, seq_new, seq_base, last_seq
                 );
-                self.packets.drain(..)
+                packets.drain(..)
             } else {
-                self.packets.drain(0..=to_remove)
-            };
-            // TODO: return the iterator and have caller invoke receive()
-            self.recv.receive(drain.filter_map(|e| e.pk));
+                packets.drain(0..=to_remove)
+            }
+        } else {
+            packets.drain(0..0)
         }
+        .filter_map(|e| e.pk)
     }
 }
 
