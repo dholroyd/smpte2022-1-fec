@@ -15,6 +15,7 @@ const TIMER: mio::Token = mio::Token(3);
 
 const PACKET_SIZE_MAX: usize = 1500;
 const PACKET_COUNT_MAX: usize = 10 * 10 * 2;
+const MAX_PACKET_BATCH: usize = 10;
 
 struct Stats {
     packets: u64,
@@ -139,50 +140,75 @@ fn main() -> Result<(), std::io::Error> {
     )?;
 
     let mut events = mio::Events::with_capacity(1024);
+    let mut pk_buf = Vec::new();
     loop {
         poll.poll(&mut events, None)?;
         for event in &events {
             match event.token() {
-                MAIN => loop {
-                    let mut pk = buffer_pool.allocate().expect("allocating main buffer");
-                    let size = match main_sock.recv(pk.payload_mut()) {
-                        Ok(s) => s,
-                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                            break;
+                MAIN => {
+                    loop {
+                        let mut pk = buffer_pool.allocate().expect("allocating main buffer");
+                        let size = match main_sock.recv(pk.payload_mut()) {
+                            Ok(s) => s,
+                            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                break;
+                            }
+                            e => panic!("err={:?}", e),
+                        };
+                        pk.truncate(size);
+                        pk_buf.push(pk);
+                        if pk_buf.len() > MAX_PACKET_BATCH {
+                            decoder
+                                .add_main_packets(pk_buf.drain(..))
+                                .expect("decoding main packet");
                         }
-                        e => panic!("err={:?}", e),
-                    };
-                    pk.truncate(size);
+                    }
                     decoder
-                        .add_main_packets(vec![pk].into_iter())
+                        .add_main_packets(pk_buf.drain(..))
                         .expect("decoding main packet");
                 },
-                FEC_ONE => loop {
-                    let mut pk = buffer_pool.allocate().expect("allocating column buffer");
-                    let size = match fec_one.recv(pk.payload_mut()) {
-                        Ok(s) => s,
-                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                            break;
+                FEC_ONE => {
+                    loop {
+                        let mut pk = buffer_pool.allocate().expect("allocating column buffer");
+                        let size = match fec_one.recv(pk.payload_mut()) {
+                            Ok(s) => s,
+                            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                break;
+                            }
+                            e => panic!("err={:?}", e),
+                        };
+                        pk.truncate(size);
+                        pk_buf.push(pk);
+                        if pk_buf.len() > MAX_PACKET_BATCH {
+                            decoder
+                                .add_column_packets(pk_buf.drain(..))
+                                .expect("decoding column packet");
                         }
-                        e => panic!("err={:?}", e),
-                    };
-                    pk.truncate(size);
+                    }
                     decoder
-                        .add_column_packets(vec![pk].into_iter())
+                        .add_column_packets(pk_buf.drain(..))
                         .expect("decoding column packet");
                 },
-                FEC_TWO => loop {
-                    let mut pk = buffer_pool.allocate().expect("allocating row buffer");
-                    let size = match fec_two.recv(pk.payload_mut()) {
-                        Ok(s) => s,
-                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                            break;
+                FEC_TWO => {
+                    loop {
+                        let mut pk = buffer_pool.allocate().expect("allocating row buffer");
+                        let size = match fec_two.recv(pk.payload_mut()) {
+                            Ok(s) => s,
+                            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                break;
+                            }
+                            e => panic!("err={:?}", e),
+                        };
+                        pk.truncate(size);
+                        pk_buf.push(pk);
+                        if pk_buf.len() > MAX_PACKET_BATCH {
+                            decoder
+                                .add_row_packets(pk_buf.drain(..))
+                                .expect("decoding row packet");
                         }
-                        e => panic!("err={:?}", e),
-                    };
-                    pk.truncate(size);
+                    }
                     decoder
-                        .add_row_packets(vec![pk].into_iter())
+                        .add_row_packets(pk_buf.drain(..))
                         .expect("decoding row packet");
                 },
                 TIMER => {
