@@ -741,12 +741,6 @@ pub struct Decoder<BP: BufferPool, Recv: Receiver<BP::P>> {
     state: State<BP, Recv>,
 }
 impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
-    ///  - `max_packet_len` A common size limit for UDP payloads is 1,472 bytes, but you might want
-    ///    to supply a larger limit if it's possible that jumbo frames might me used by the network
-    ///    and sending application.
-    ///  - `max_packet_batch_size` The largest number of packets that the caller wants to be able
-    ///    to pass in one batch.  Controls the sizes of the lists returned by `next_*_buffers()`
-    ///    methods.
     pub fn new(buffer_pool: BP, receiver: Recv) -> Decoder<BP, Recv> {
         Decoder {
             state: State::Start(buffer_pool, receiver),
