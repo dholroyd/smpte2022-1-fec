@@ -180,6 +180,7 @@ impl<P: Packet, Recv: Receiver<P>> PacketSequence<P, Recv> {
             // fill any gaps in the sequence with placeholders,
             let expected = last_seq.next();
             if expected < seq {
+                // end-exclusive-range, because we don't want a placeholder for 'seq' itself,
                 for s in (expected..seq).seq_iter() {
                     self.packets.push_back(SeqEntry { seq: s, pk: None });
                 }
@@ -448,7 +449,9 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         Ok(res)
     }
 
-    /// returns an iterator over the main packets associated with the given FEC packet
+    /// Returns an iterator over the main packets associated with the given FEC packet.
+    /// The iterator will return `None` for any positions in the matrix were there is not actually
+    /// a packet available right now.
     fn iter_associated(
         &self,
         fec_header: &FecHeader<'_>,
@@ -457,6 +460,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> FecMatrix<BP, Recv> {
         let sn_end =
             sn_start + u16::from(fec_header.number_associated()) * u16::from(fec_header.offset());
 
+        // end-exclusive-range, since sn_end is the first sequence-number we don't want to consider
         (sn_start..sn_end)
             .seq_iter()
             .step_by(fec_header.offset() as usize)
