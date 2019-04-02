@@ -8,6 +8,9 @@ use std::net::SocketAddr;
 use std::rc;
 use std::time;
 use log::*;
+use mpeg2ts_reader::{ demultiplex, packet, pes };
+use mpeg2ts_reader::packet_filter_switch;
+use mpeg2ts_reader::demux_context;
 
 const MAIN: mio::Token = mio::Token(0);
 const FEC_ONE: mio::Token = mio::Token(1);
@@ -32,9 +35,78 @@ impl Stats {
     }
 }
 
+packet_filter_switch! {
+    CheckFilterSwitch<CheckDemuxContext> {
+        Pat: demultiplex::PatPacketFilter<CheckDemuxContext>,
+        Pmt: demultiplex::PmtPacketFilter<CheckDemuxContext>,
+        Pes: pes::PesPacketFilter<CheckDemuxContext, NullElementaryStreamConsumer>,
+        Null: demultiplex::NullPacketFilter<CheckDemuxContext>,
+    }
+}
+demux_context!(CheckDemuxContext, CheckFilterSwitch);
+impl CheckDemuxContext {
+    fn do_construct(&mut self, req: demultiplex::FilterRequest<'_, '_>) -> CheckFilterSwitch {
+        match req {
+            demultiplex::FilterRequest::ByPid(packet::Pid::PAT) => {
+                CheckFilterSwitch::Pat(demultiplex::PatPacketFilter::default())
+            }
+            demultiplex::FilterRequest::ByPid(packet::Pid::STUFFING) => {
+                CheckFilterSwitch::Null(demultiplex::NullPacketFilter::default())
+            }
+            demultiplex::FilterRequest::ByPid(_) => {
+                CheckFilterSwitch::Null(demultiplex::NullPacketFilter::default())
+            }
+            demultiplex::FilterRequest::ByStream {
+                stream_type,
+                pmt: _,
+                stream_info,
+                ..
+            } => {
+                if stream_type.is_pes() {
+                    println!("adding {:?} {:?}", stream_type, stream_info.elementary_pid());
+                    CheckFilterSwitch::Pes(pes::PesPacketFilter::new(NullElementaryStreamConsumer))
+                } else {
+                    CheckFilterSwitch::Null(demultiplex::NullPacketFilter::default())
+                }
+            },
+            demultiplex::FilterRequest::Pmt {
+                pid,
+                program_number,
+            } => CheckFilterSwitch::Pmt(demultiplex::PmtPacketFilter::new(pid, program_number)),
+            demultiplex::FilterRequest::Nit { .. } => {
+                CheckFilterSwitch::Null(demultiplex::NullPacketFilter::default())
+            }
+        }
+    }
+}
+pub struct NullElementaryStreamConsumer;
+impl pes::ElementaryStreamConsumer for NullElementaryStreamConsumer {
+    fn start_stream(&mut self) { }
+    fn begin_packet(&mut self, _header: pes::PesHeader) { }
+    fn continue_packet(&mut self, _data: &[u8]) { }
+    fn end_packet(&mut self) { }
+    fn continuity_error(&mut self) { }
+}
+
 struct MyReceiver {
     last_seq: Option<rtp_rs::Seq>,
     stats: rc::Rc<cell::RefCell<Stats>>,
+    demux: demultiplex::Demultiplex<CheckDemuxContext>,
+    ctx: CheckDemuxContext,
+}
+impl MyReceiver {
+    fn new(stats: rc::Rc<cell::RefCell<Stats>>) -> MyReceiver {
+        let mut ctx = CheckDemuxContext::new();
+
+        // create the demultiplexer, which will use the ctx to create a filter for pid 0 (PAT)
+        let demux = demultiplex::Demultiplex::new(&mut ctx);
+        MyReceiver {
+            last_seq: None,
+            stats,
+            demux,
+            ctx,
+        }
+    }
 }
 impl Receiver<HeapPacket> for MyReceiver {
     fn receive(&mut self, packets: impl Iterator<Item = (HeapPacket, PacketStatus)>) {
@@ -77,6 +149,11 @@ impl Receiver<HeapPacket> for MyReceiver {
                         }
                     }
                     self.last_seq = Some(this_seq);
+                    if header.payload().len() % packet::Packet::SIZE == 0 {
+                        self.demux.push(&mut self.ctx, header.payload());
+                    } else {
+                        println!("Ignoring packet with suspicious payload len {}", header.payload().len());
+                    }
                 }
                 Err(e) => println!("packet error {:?}", e),
             }
@@ -113,10 +190,7 @@ fn main() -> Result<(), std::io::Error> {
     timer.set_timeout(time::Duration::from_millis(2000), stats.clone());
 
     let buffer_pool = HeapPool::new(PACKET_COUNT_MAX, PACKET_SIZE_MAX);
-    let recv = MyReceiver {
-        last_seq: None,
-        stats,
-    };
+    let recv = MyReceiver::new(stats);
     let mut decoder = Decoder::new(buffer_pool.clone(), recv);
 
     let poll = mio::Poll::new()?;
