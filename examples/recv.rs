@@ -1,3 +1,7 @@
+use log::*;
+use mpeg2ts_reader::demux_context;
+use mpeg2ts_reader::packet_filter_switch;
+use mpeg2ts_reader::{demultiplex, packet, pes};
 use smpte2022_1_fec::heap_pool::HeapPacket;
 use smpte2022_1_fec::heap_pool::HeapPool;
 use smpte2022_1_fec::*;
@@ -7,10 +11,6 @@ use std::io;
 use std::net::SocketAddr;
 use std::rc;
 use std::time;
-use log::*;
-use mpeg2ts_reader::{ demultiplex, packet, pes };
-use mpeg2ts_reader::packet_filter_switch;
-use mpeg2ts_reader::demux_context;
 
 const MAIN: mio::Token = mio::Token(0);
 const FEC_ONE: mio::Token = mio::Token(1);
@@ -63,12 +63,16 @@ impl CheckDemuxContext {
                 ..
             } => {
                 if stream_type.is_pes() {
-                    println!("adding {:?} {:?}", stream_type, stream_info.elementary_pid());
+                    println!(
+                        "adding {:?} {:?}",
+                        stream_type,
+                        stream_info.elementary_pid()
+                    );
                     CheckFilterSwitch::Pes(pes::PesPacketFilter::new(NullElementaryStreamConsumer))
                 } else {
                     CheckFilterSwitch::Null(demultiplex::NullPacketFilter::default())
                 }
-            },
+            }
             demultiplex::FilterRequest::Pmt {
                 pid,
                 program_number,
@@ -81,11 +85,11 @@ impl CheckDemuxContext {
 }
 pub struct NullElementaryStreamConsumer;
 impl pes::ElementaryStreamConsumer for NullElementaryStreamConsumer {
-    fn start_stream(&mut self) { }
-    fn begin_packet(&mut self, _header: pes::PesHeader) { }
-    fn continue_packet(&mut self, _data: &[u8]) { }
-    fn end_packet(&mut self) { }
-    fn continuity_error(&mut self) { }
+    fn start_stream(&mut self) {}
+    fn begin_packet(&mut self, _header: pes::PesHeader) {}
+    fn continue_packet(&mut self, _data: &[u8]) {}
+    fn end_packet(&mut self) {}
+    fn continuity_error(&mut self) {}
 }
 
 struct MyReceiver {
@@ -152,7 +156,10 @@ impl Receiver<HeapPacket> for MyReceiver {
                     if header.payload().len() % packet::Packet::SIZE == 0 {
                         self.demux.push(&mut self.ctx, header.payload());
                     } else {
-                        println!("Ignoring packet with suspicious payload len {}", header.payload().len());
+                        println!(
+                            "Ignoring packet with suspicious payload len {}",
+                            header.payload().len()
+                        );
                     }
                 }
                 Err(e) => println!("packet error {:?}", e),
@@ -235,12 +242,12 @@ fn main() -> Result<(), std::io::Error> {
                         if pk_buf.len() > MAX_PACKET_BATCH {
                             decoder
                                 .add_main_packets(pk_buf.drain(..))
-                                .unwrap_or_else(|e| error!("Main packet: {:?}", e) )
+                                .unwrap_or_else(|e| error!("Main packet: {:?}", e))
                         }
                     }
                     decoder
                         .add_main_packets(pk_buf.drain(..))
-                        .unwrap_or_else(|e| error!("Main packet: {:?}", e) )
+                        .unwrap_or_else(|e| error!("Main packet: {:?}", e))
                 }
                 FEC_ONE => {
                     loop {
@@ -257,12 +264,12 @@ fn main() -> Result<(), std::io::Error> {
                         if pk_buf.len() > MAX_PACKET_BATCH {
                             decoder
                                 .add_column_packets(pk_buf.drain(..))
-                                .unwrap_or_else(|e| error!("Col packet: {:?}", e) )
+                                .unwrap_or_else(|e| error!("Col packet: {:?}", e))
                         }
                     }
                     decoder
                         .add_column_packets(pk_buf.drain(..))
-                        .unwrap_or_else(|e| error!("Col packet: {:?}", e) )
+                        .unwrap_or_else(|e| error!("Col packet: {:?}", e))
                 }
                 FEC_TWO => {
                     loop {
@@ -279,12 +286,12 @@ fn main() -> Result<(), std::io::Error> {
                         if pk_buf.len() > MAX_PACKET_BATCH {
                             decoder
                                 .add_row_packets(pk_buf.drain(..))
-                                .unwrap_or_else(|e| error!("Row packet: {:?}", e) )
+                                .unwrap_or_else(|e| error!("Row packet: {:?}", e))
                         }
                     }
                     decoder
                         .add_row_packets(pk_buf.drain(..))
-                        .unwrap_or_else(|e| error!("Row packet: {:?}", e) )
+                        .unwrap_or_else(|e| error!("Row packet: {:?}", e))
                 }
                 TIMER => {
                     let stats = timer.poll().unwrap();

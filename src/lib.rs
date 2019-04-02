@@ -871,13 +871,13 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
                                 geometry, geom
                             );
                             self.state.reconfigure(geom);
-                        },
+                        }
                         Orientation::Row => {
                             warn!(
                                 "Row packet incompatible with current FEC settings {:?} {:?}",
                                 geometry, header
                             );
-                            return Err(FecGeometryError::RowIncompatibleWithColumn)
+                            return Err(FecGeometryError::RowIncompatibleWithColumn);
                         }
                     }
                 }
