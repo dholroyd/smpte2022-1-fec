@@ -16,7 +16,7 @@ arrayvec = "0.4.10"
 log = "0.4"
 
 [dev-dependencies]
-hex-literal = "0.1"
+hex-literal = "0.2"
 
 # For examples
 mio = "0.6"
