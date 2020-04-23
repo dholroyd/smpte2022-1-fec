@@ -19,7 +19,7 @@ log = "0.4"
 hex-literal = "0.2"
 
 # For examples
-mio = "0.6"
+mio = "0.7"
 mio-extras = "2.0"
 socket2 = "0.3"
 env_logger = "0.7"
