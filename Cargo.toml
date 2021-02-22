@@ -1,6 +1,6 @@
 [package]
 name = "smpte2022-1-fec"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["David Holroyd <dave@badgers-in-foil.co.uk>"]
 description = "Decoder for SMPTE 2022-1 FEC protected data"
 repository = "https://github.com/dholroyd/smpte2022-1-fec"
