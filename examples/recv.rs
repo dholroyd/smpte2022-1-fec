@@ -15,7 +15,6 @@ use std::time;
 const MAIN: mio::Token = mio::Token(0);
 const FEC_ONE: mio::Token = mio::Token(1);
 const FEC_TWO: mio::Token = mio::Token(2);
-const TIMER: mio::Token = mio::Token(3);
 
 const PACKET_SIZE_MAX: usize = 1500;
 const PACKET_COUNT_MAX: usize = 10 * 10 * 2;
@@ -178,7 +177,7 @@ fn create_source(port: u16) -> Result<mio::net::UdpSocket, io::Error> {
         port,
     );
     s.bind(&addr.into())?;
-    mio::net::UdpSocket::from_socket(s.into_udp_socket())
+    Ok(mio::net::UdpSocket::from_std(s.into_udp_socket()))
 }
 
 fn main() -> Result<(), std::io::Error> {
@@ -190,41 +189,36 @@ fn main() -> Result<(), std::io::Error> {
         recovered: 0,
     }));
     let base_port = 5000;
-    let main_sock = create_source(base_port)?;
-    let fec_one = create_source(base_port + 2)?;
-    let fec_two = create_source(base_port + 4)?;
-    let mut timer = mio_extras::timer::Timer::default();
-    timer.set_timeout(time::Duration::from_millis(2000), stats.clone());
+    let mut main_sock = create_source(base_port)?;
+    let mut fec_one = create_source(base_port + 2)?;
+    let mut fec_two = create_source(base_port + 4)?;
 
     let buffer_pool = HeapPool::new(PACKET_COUNT_MAX, PACKET_SIZE_MAX);
     let recv = MyReceiver::new(stats);
     let mut decoder = Decoder::new(buffer_pool.clone(), recv);
 
-    let poll = mio::Poll::new()?;
-    poll.register(&timer, TIMER, mio::Ready::readable(), mio::PollOpt::edge())?;
-    poll.register(
-        &main_sock,
+    let mut poll = mio::Poll::new()?;
+    let reg = poll.registry();
+    reg.register(
+        &mut main_sock,
         MAIN,
-        mio::Ready::readable(),
-        mio::PollOpt::edge(),
+        mio::Interest::READABLE,
     )?;
-    poll.register(
-        &fec_one,
+    reg.register(
+        &mut fec_one,
         FEC_ONE,
-        mio::Ready::readable(),
-        mio::PollOpt::edge(),
+        mio::Interest::READABLE,
     )?;
-    poll.register(
-        &fec_two,
+    reg.register(
+        &mut fec_two,
         FEC_TWO,
-        mio::Ready::readable(),
-        mio::PollOpt::edge(),
+        mio::Interest::READABLE,
     )?;
 
     let mut events = mio::Events::with_capacity(1024);
     let mut pk_buf = Vec::new();
     loop {
-        poll.poll(&mut events, None)?;
+        poll.poll(&mut events, Some(time::Duration::from_secs(1)))?;
         for event in &events {
             match event.token() {
                 MAIN => {
@@ -292,12 +286,6 @@ fn main() -> Result<(), std::io::Error> {
                     decoder
                         .add_row_packets(pk_buf.drain(..))
                         .unwrap_or_else(|e| error!("Row packet: {:?}", e))
-                }
-                TIMER => {
-                    let stats = timer.poll().unwrap();
-                    stats.borrow().dump();
-                    // re-arm the timeout,
-                    timer.set_timeout(time::Duration::from_millis(2000), stats);
                 }
                 t => panic!("unexpected {:?}", t),
             }
