@@ -635,7 +635,10 @@ enum State<BP: BufferPool, Recv: Receiver<BP::P>> {
     /// This state just exits so that overwrite some other state during the transition from one
     /// state to another.
     Init,
-    Start(BP, Recv),
+    Start {
+        buffer_pool: BP,
+        recv: Recv
+    },
     Running {
         geometry: FecGeometry,
         matrix: FecMatrix<BP, Recv>,
@@ -644,7 +647,7 @@ enum State<BP: BufferPool, Recv: Receiver<BP::P>> {
 impl<BP: BufferPool, Recv: Receiver<BP::P>> State<BP, Recv> {
     fn running(&mut self, width: u8, height: u8, geometry: FecGeometry) {
         *self = match std::mem::replace(self, State::Init) {
-            State::Start(buffer_pool, receiver) => State::Running {
+            State::Start { buffer_pool, recv: receiver } => State::Running {
                 geometry,
                 matrix: FecMatrix::new(buffer_pool, width, height, receiver),
             },
@@ -674,24 +677,29 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> State<BP, Recv> {
         recovered: &mut arrayvec::ArrayVec<[BP::P; 10]>,
         pk_status: PacketStatus,
     ) -> Result<(), FecDecodeError> {
-        // if not Running, there's nothing to do; calling code should forward packet on to receiver
-        if let State::Running { ref mut matrix, .. } = self {
-            match matrix.insert(seq, pk, pk_status)? {
-                Corrections::None => (),
-                Corrections::One(a) => {
-                    recovered
-                        .try_push(a)
-                        .map_err(|_e| FecDecodeError::NoSpaceForRecovered)?;
-                }
-                Corrections::Two(a, b) => {
-                    recovered
-                        .try_push(a)
-                        .map_err(|_e| FecDecodeError::NoSpaceForRecovered)?;
-                    recovered
-                        .try_push(b)
-                        .map_err(|_e| FecDecodeError::NoSpaceForRecovered)?;
+        match self {
+            State::Start { ref mut recv, .. } => {
+                recv.receive(std::iter::once((pk, PacketStatus::Received)));
+            }
+            State::Running { ref mut matrix, .. } => {
+                match matrix.insert(seq, pk, pk_status)? {
+                    Corrections::None => (),
+                    Corrections::One(a) => {
+                        recovered
+                            .try_push(a)
+                            .map_err(|_e| FecDecodeError::NoSpaceForRecovered)?;
+                    }
+                    Corrections::Two(a, b) => {
+                        recovered
+                            .try_push(a)
+                            .map_err(|_e| FecDecodeError::NoSpaceForRecovered)?;
+                        recovered
+                            .try_push(b)
+                            .map_err(|_e| FecDecodeError::NoSpaceForRecovered)?;
+                    }
                 }
             }
+            _ => {}
         }
         Ok(())
     }
@@ -757,7 +765,10 @@ pub struct Decoder<BP: BufferPool, Recv: Receiver<BP::P>> {
 impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
     pub fn new(buffer_pool: BP, receiver: Recv) -> Decoder<BP, Recv> {
         Decoder {
-            state: State::Start(buffer_pool, receiver),
+            state: State::Start {
+                buffer_pool: buffer_pool,
+                recv: receiver
+            },
         }
     }
 
@@ -852,7 +863,7 @@ impl<BP: BufferPool, Recv: Receiver<BP::P>> Decoder<BP, Recv> {
         //       reallocate buffers every time a packet arrives in worst case.
         match self.state {
             State::Init => panic!("self.state is State::Init"),
-            State::Start(..) => {
+            State::Start { .. } => {
                 if let Ok(geometry) = FecGeometry::from_header(&header) {
                     let width = geometry.d;
                     let height = geometry.l;
