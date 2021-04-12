@@ -83,12 +83,12 @@ impl CheckDemuxContext {
     }
 }
 pub struct NullElementaryStreamConsumer;
-impl pes::ElementaryStreamConsumer for NullElementaryStreamConsumer {
-    fn start_stream(&mut self) {}
-    fn begin_packet(&mut self, _header: pes::PesHeader) {}
-    fn continue_packet(&mut self, _data: &[u8]) {}
-    fn end_packet(&mut self) {}
-    fn continuity_error(&mut self) {}
+impl<Ctx> pes::ElementaryStreamConsumer<Ctx> for NullElementaryStreamConsumer {
+    fn start_stream(&mut self, _ctx: &mut Ctx) {}
+    fn begin_packet(&mut self, _ctx: &mut Ctx, _header: pes::PesHeader) {}
+    fn continue_packet(&mut self, _ctx: &mut Ctx, _data: &[u8]) {}
+    fn end_packet(&mut self, _ctx: &mut Ctx) {}
+    fn continuity_error(&mut self, _ctx: &mut Ctx) {}
 }
 
 struct MyReceiver {
