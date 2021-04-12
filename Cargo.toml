@@ -22,4 +22,4 @@ hex-literal = "0.2"
 mio = { version = "0.7", features = [ "udp", "os-poll" ] }
 socket2 = "0.3"
 env_logger = "0.8"
-mpeg2ts-reader = "0.13"
+mpeg2ts-reader = "0.14"
