@@ -16,7 +16,7 @@ arrayvec = "0.5.1"
 log = "0.4"
 
 [dev-dependencies]
-hex-literal = "0.2"
+hex-literal = "0.3"
 
 # For examples
 mio = { version = "0.7", features = [ "udp", "os-poll" ] }
