@@ -19,7 +19,7 @@ log = "0.4"
 hex-literal = "0.3"
 
 # For examples
-mio = { version = "0.7", features = [ "udp", "os-poll" ] }
+mio = { version = "0.8", features = [ "udp", "os-poll" ] }
 socket2 = "0.3"
 env_logger = "0.8"
 mpeg2ts-reader = "0.15"
